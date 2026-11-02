@@ -7,3 +7,4 @@ export * from './vouchers/accept.js';
 export * from './channels/types.js';
 export * from './channels/memory.js';
 export * from './settlement/intent.js';
+export * from './channels/soroban.js';

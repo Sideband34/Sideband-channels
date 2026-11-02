@@ -69,3 +69,18 @@ export interface ChannelAdapter {
   /** Payer reclaims the deposit after expiry if the provider never closed. */
   refund(channelId: string): Promise<SettleResult>;
 }
+
+/**
+ * Thrown by chain adapters when a submission's outcome is unknown (timeout,
+ * lost connection). `txHash` MUST be known before submission so callers
+ * reconcile by hash instead of blindly retrying.
+ */
+export class SubmissionTimeoutError extends Error {
+  constructor(
+    readonly txHash: string,
+    message = 'Submission outcome unknown',
+  ) {
+    super(message);
+    this.name = 'SubmissionTimeoutError';
+  }
+}
