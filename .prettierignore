@@ -1,0 +1,7 @@
+node_modules
+dist
+contracts/**/target
+package-lock.json
+brand
+docs
+*.md
