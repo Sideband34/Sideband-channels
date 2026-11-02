@@ -42,7 +42,10 @@ const policy = {
 const signer = keypairSigner(payerKp);
 for (const n of [1n, 2n, 2n, 1n, 3n]) {
   const r = await acceptVoucher(domain, policy, store, createVoucher(signer, domain, n * S));
-  console.log(`voucher ${n}:`, r.ok ? `accepted (cumulative ${r.cumulative})` : `rejected ${r.code}`);
+  console.log(
+    `voucher ${n}:`,
+    r.ok ? `accepted (cumulative ${r.cumulative})` : `rejected ${r.code}`,
+  );
 }
 const highest = (await store.get(binding.channelId))!;
 const intent = prepareSettlement(binding, highest);
