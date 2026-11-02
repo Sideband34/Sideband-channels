@@ -58,7 +58,7 @@ The project uses the **approved flat SVG logo** in [`brand/icon.svg`](./brand/ic
 **NOT done / unverified**
 
 - No Testnet deployment, no real transaction hashes: the Soroban RPC adapter does not exist yet, and the contract has only been run in the SDK test environment (the WASM build needs `stellar-cli`, not run here).
-- The voucher layout is `sideband-test-format-v1`, **not** upstream `one-way-channel`/`stellar-mpp-sdk` compatible and **not audited** (see `docs/adr/0001-voucher-test-format.md`). Testnet/synthetic only.
+- The voucher bytes follow the upstream one-way-channel commitment layout (not yet checked against a live upstream contract on Testnet; upstream is unaudited) (see `docs/adr/0001-voucher-test-format.md`). Testnet/synthetic only.
 - Dev-tooling `npm audit` reports a moderate `minimatch` advisory via eslint; production dependencies are unaffected.
 
 ## Quick start

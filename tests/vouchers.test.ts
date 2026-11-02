@@ -1,12 +1,13 @@
+import { StrKey } from '@stellar/stellar-sdk';
 import { describe, expect, it } from 'vitest';
 import {
   NETWORK_PASSPHRASES,
   NetworkError,
-  PREIMAGE_LENGTH,
   buildPreimage,
   createVoucher,
   formatAmount,
   keypairSigner,
+  networkId,
   parseAmount,
   verifyVoucher,
 } from '../src/index.js';
@@ -26,13 +27,58 @@ describe('amount', () => {
   });
 });
 
+describe('upstream commitment layout', () => {
+  it('equals an independent hand-written XDR encoding of the one-way-channel Commitment', async () => {
+    const { domain } = await openChannel();
+    const u32 = (n: number) =>
+      Buffer.from([(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]);
+    const sym = (s: string) =>
+      Buffer.concat([
+        u32(15),
+        u32(s.length),
+        Buffer.from(s.padEnd(Math.ceil(s.length / 4) * 4, '\0')),
+      ]);
+    const amount = 25_000_000n;
+    const i128 = Buffer.alloc(16);
+    i128.writeBigInt64BE(amount >> 64n, 0);
+    i128.writeBigUInt64BE(amount & ((1n << 64n) - 1n), 8);
+    const raw = Buffer.from(StrKey.decodeContract(domain.channelId));
+    const expected = Buffer.concat([
+      u32(17),
+      u32(1),
+      u32(4), // SCV_MAP, present, 4 entries
+      sym('amount'),
+      u32(10),
+      i128, // SCV_I128
+      sym('channel'),
+      u32(18),
+      u32(1),
+      raw, // SCV_ADDRESS, contract
+      sym('domain'),
+      sym('chancmmt'),
+      sym('network'),
+      u32(13),
+      u32(32),
+      Buffer.from(networkId(domain.networkPassphrase)),
+    ]);
+    expect(Buffer.from(buildPreimage(domain, amount)).equals(expected)).toBe(true);
+  });
+  it('does not bind payer or provider (fixed per channel at deployment)', async () => {
+    const { domain } = await openChannel();
+    const other = { ...domain, payer: attackerKp.publicKey(), provider: attackerKp.publicKey() };
+    expect(Buffer.from(buildPreimage(other, STROOPS))).toEqual(
+      Buffer.from(buildPreimage(domain, STROOPS)),
+    );
+  });
+});
+
 describe('voucher create/verify', () => {
   it('verifies a freshly created voucher', async () => {
     const { domain } = await openChannel();
     const v = createVoucher(payer, domain, 2n * STROOPS);
     expect(v.cumulativeAmount).toBe('2');
     expect(v.channelRef).toBe(domain.channelId);
-    expect(buildPreimage(domain, 2n * STROOPS)).toHaveLength(PREIMAGE_LENGTH);
+    expect(buildPreimage(domain, 2n * STROOPS)).toHaveLength(192);
     expect(verifyVoucher(domain, v)).toEqual({ ok: true, cumulative: 2n * STROOPS });
   });
 

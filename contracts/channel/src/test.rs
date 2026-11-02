@@ -78,7 +78,6 @@ fn setup<'a>(deposit: i128, network_hex: Option<&str>, channel_hex: Option<&str>
         &payer,
         &provider,
         &b32(&env, fx["payerPublicKeyHex"].as_str().unwrap()),
-        &b32(&env, fx["providerPublicKeyHex"].as_str().unwrap()),
         &deposit,
         &10_000,
     );
@@ -223,7 +222,7 @@ fn init_twice_and_bad_params_fail() {
     let t = c.token.address.clone();
     assert_eq!(
         c.client
-            .try_init(&t, &c.payer, &c.provider, &k, &k, &UNIT, &20_000),
+            .try_init(&t, &c.payer, &c.provider, &k, &UNIT, &20_000),
         Err(Ok(Error::AlreadyInitialized))
     );
 }

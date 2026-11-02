@@ -1,38 +1,40 @@
-import { StrKey } from '@stellar/stellar-sdk';
+import { Address, StrKey, nativeToScVal, xdr } from '@stellar/stellar-sdk';
 import { MAX_STROOPS } from '../amount.js';
 import { networkId } from '../networks.js';
 
 /**
- * SIDEBAND TEST FORMAT v1 (`sideband-test-format-v1`).
+ * Voucher signed bytes: `sideband-commit-v2`, i.e. the commitment format of
+ * stellar-experimental/one-way-channel (Apache-2.0), commit 25dea1b:
  *
- * This is the byte layout Sideband signs for cumulative vouchers. It is a
- * Sideband-defined, domain-separated layout; it is NOT claimed to be wire
- * compatible with stellar-experimental/one-way-channel or stellar-mpp-sdk and
- * has NOT been security reviewed. Before real funds, replace/verify against
- * the reviewed upstream format. Testnet/synthetic use only.
+ *   preimage = XDR( ScVal::Map {
+ *     amount:  I128(cumulative stroops),
+ *     channel: Address(channel contract),
+ *     domain:  Symbol("chancmmt"),
+ *     network: Bytes(sha256(network passphrase)),
+ *   } )                       // keys in ascending order, as Soroban requires
  *
- * preimage = DOMAIN(19 ascii) || 0x00
- *         || networkId(32)          sha256(network passphrase)
- *         || channelId(32)          raw contract id (strkey C... decoded)
- *         || payer(32)              raw ed25519 key (strkey G... decoded)
- *         || provider(32)           raw ed25519 key
- *         || cumulative(16)         unsigned big-endian stroops, < 2^127
+ * This matches `Commitment::into_bytes` / `prepare_commitment` upstream and
+ * `buildCommitmentMessage` in stellar/stellar-mpp-sdk. The channel address
+ * binds the voucher to one channel whose payer key and provider are fixed at
+ * deployment, so payer/provider are NOT part of the bytes.
+ * Not verified here against a live upstream deployment (no Testnet run yet),
+ * and upstream is itself unaudited. See docs/adr/0001.
  *
- * commitment = lowercase hex sha256(preimage)
- * signature  = lowercase hex ed25519 signature over preimage (64 bytes)
+ * Sideband wire fields (protocol `VoucherFrame`):
+ *   commitment = lowercase hex sha256(preimage)   (integrity binding)
+ *   signature  = lowercase hex ed25519 signature over preimage (64 bytes)
  */
-export const VOUCHER_FORMAT = 'sideband-test-format-v1';
-export const VOUCHER_DOMAIN = 'sideband/voucher/v1';
-export const PREIMAGE_LENGTH = VOUCHER_DOMAIN.length + 1 + 32 * 4 + 16;
+export const VOUCHER_FORMAT = 'sideband-commit-v2';
+export const COMMITMENT_DOMAIN = 'chancmmt';
 
 export interface VoucherDomain {
   /** Network passphrase the channel lives on. */
   readonly networkPassphrase: string;
   /** Contract id, `C...` strkey. */
   readonly channelId: string;
-  /** Payer commitment key, `G...` strkey. */
+  /** Payer commitment key, `G...` strkey (verifies signatures). */
   readonly payer: string;
-  /** Provider key, `G...` strkey. */
+  /** Provider key, `G...` strkey (checked by adapters/gateway, not signed). */
   readonly provider: string;
 }
 
@@ -47,31 +49,25 @@ export function buildPreimage(domain: VoucherDomain, cumulative: bigint): Uint8A
   if (cumulative <= 0n || cumulative > MAX_STROOPS) {
     throw new VoucherFormatError('Cumulative amount out of range');
   }
-  let channel: Uint8Array, payer: Uint8Array, provider: Uint8Array;
+  let channel: Address;
   try {
-    channel = StrKey.decodeContract(domain.channelId);
-    payer = StrKey.decodeEd25519PublicKey(domain.payer);
-    provider = StrKey.decodeEd25519PublicKey(domain.provider);
+    channel = new Address(domain.channelId);
+    StrKey.decodeEd25519PublicKey(domain.payer);
+    StrKey.decodeEd25519PublicKey(domain.provider);
   } catch {
     throw new VoucherFormatError('Invalid channel/payer/provider strkey');
   }
-  const out = new Uint8Array(PREIMAGE_LENGTH);
-  let o = 0;
-  out.set(Buffer.from(VOUCHER_DOMAIN, 'ascii'), o);
-  o += VOUCHER_DOMAIN.length;
-  out[o++] = 0;
-  out.set(networkId(domain.networkPassphrase), o);
-  o += 32;
-  out.set(channel, o);
-  o += 32;
-  out.set(payer, o);
-  o += 32;
-  out.set(provider, o);
-  o += 32;
-  let v = cumulative;
-  for (let i = 15; i >= 0; i--) {
-    out[o + i] = Number(v & 0xffn);
-    v >>= 8n;
+  if (!StrKey.isValidContract(domain.channelId)) {
+    throw new VoucherFormatError('Channel must be a contract address');
   }
-  return out;
+  const sym = (s: string) => nativeToScVal(s, { type: 'symbol' });
+  return xdr.ScVal.scvMap([
+    new xdr.ScMapEntry({ key: sym('amount'), val: nativeToScVal(cumulative, { type: 'i128' }) }),
+    new xdr.ScMapEntry({ key: sym('channel'), val: channel.toScVal() }),
+    new xdr.ScMapEntry({ key: sym('domain'), val: sym(COMMITMENT_DOMAIN) }),
+    new xdr.ScMapEntry({
+      key: sym('network'),
+      val: xdr.ScVal.scvBytes(networkId(domain.networkPassphrase)),
+    }),
+  ]).toXdr();
 }

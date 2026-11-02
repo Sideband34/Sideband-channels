@@ -1,24 +1,40 @@
-# ADR 0001 — Voucher byte layout is a labeled test format
+# ADR 0001 — Voucher signed bytes
 
-Status: accepted (M1). Revisit before any non-Testnet use.
+Status: accepted, revised in M2 (supersedes the initial `sideband-test-format-v1`).
 
 ## Context
 `docs/TECHNICAL_BUILD.md` names `stellar-mpp-sdk` and
-`stellar-experimental/one-way-channel` as reference implementations, to be
-verified for license/API compatibility. Neither was vendored or audited here,
-and we will not invent bytes and pretend they are upstream's.
+`stellar-experimental/one-way-channel` as reference implementations. The first
+M1 cut invented its own byte layout and labeled it a test format because the
+upstream sources had not been inspected.
+
+## Findings (upstream inspected at one-way-channel `25dea1b`, stellar-mpp-sdk main)
+- Both are reachable and Apache-2.0 licensed; both say the contract is unaudited.
+- A commitment is `XDR(ScVal::Map{ amount: I128, channel: Address,
+  domain: Symbol("chancmmt"), network: Bytes32(sha256(passphrase)) })`, signed
+  with the channel's ed25519 `commitment_key`. Amounts are cumulative.
+  `stellar-mpp-sdk` builds the same bytes locally (`buildCommitmentMessage`) and
+  guards drift with a live parity test against `prepare_commitment`.
+- Payer key and recipient are fixed at channel deployment, so they are not part
+  of the signed bytes.
 
 ## Decision
-Define `sideband-test-format-v1` (layout in `src/vouchers/format.ts`): domain tag,
-network id, raw channel id, payer key, provider key, 16-byte big-endian
-cumulative amount; ed25519 signature over that preimage; `commitment` is
-sha256(preimage). The same bytes are built by the TS SDK and by the Rust
-contract (`contracts/channel`), and golden vectors in
-`fixtures/voucher-vectors.json` prove TS-signed vouchers verify in the contract.
+Adopt the upstream commitment bytes (`sideband-commit-v2`) for vouchers in the
+TS SDK (`src/vouchers/format.ts`, built with `@stellar/stellar-sdk` XDR) and in
+the reference contract (`Commitment` struct, same field names so Soroban emits
+the identical map). A test compares the SDK output against an independent
+hand-written XDR encoder. Sideband's wire `commitment` field stays
+sha256(preimage) and `signature` stays the hex ed25519 signature.
 
 ## Consequences
-- Domain separation covers network, channel, payer and provider.
-- Monotonicity is enforced off-chain by atomic CAS (`VoucherStore`) and on-chain
-  by single-shot `close`.
-- NOT compatible with upstream one-way-channel; NOT audited. A format change
-  bumps the domain tag (`.../v2`) and the fixtures; consumers pin the fixture.
+- Vouchers are now byte-identical in layout to upstream; they are not yet
+  verified against an upstream contract instance on Testnet (no network run).
+  Upstream's `commitment-parity` live test should be mirrored once Testnet
+  deployment exists.
+- Our reference contract is NOT upstream: it has a single-shot `close` and a
+  payer `refund` after expiry, without upstream's `settle`, `top_up`,
+  `close_start` and refund waiting period. For real use prefer deploying the
+  upstream contract (its wasm is in stellar-mpp-sdk fixtures) and treating this
+  contract as a test double.
+- Format changes bump the tag (`sideband-commit-v3`) and regenerate fixtures;
+  gateway and mobile pin the fixture.

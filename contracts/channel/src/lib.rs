@@ -1,8 +1,9 @@
 //! Sideband one-way payment channel (reference implementation).
 //!
-//! EXPERIMENTAL / NOT AUDITED. Testnet and synthetic assets only. The voucher
-//! byte layout is `sideband-test-format-v1` (see docs/adr/0001) and is NOT
-//! claimed compatible with stellar-experimental/one-way-channel.
+//! EXPERIMENTAL / NOT AUDITED. Testnet and synthetic assets only. Vouchers
+//! are signed over the `Commitment` XDR of stellar-experimental/one-way-channel
+//! (Apache-2.0), see docs/adr/0001. Channel semantics here are simpler than
+//! upstream (single-shot close, no close_start/settle).
 //!
 //! Lifecycle: `init` (payer deposits, while online) -> provider `close` with
 //! the highest cumulative voucher (pays provider, refunds remainder) OR payer
@@ -10,11 +11,9 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, xdr::ToXdr, Address, Bytes, BytesN,
-    Env,
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, xdr::ToXdr, Address,
+    Bytes, BytesN, Env, Symbol,
 };
-
-const DOMAIN: &[u8] = b"sideband/voucher/v1";
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -44,8 +43,6 @@ pub struct Channel {
     pub provider: Address,
     /// Raw ed25519 key that signs vouchers (the payer commitment key).
     pub payer_key: BytesN<32>,
-    /// Raw ed25519 key of the provider; bound into the voucher domain.
-    pub provider_key: BytesN<32>,
     pub deposit: i128,
     pub expires_at: u64,
     pub status: Status,
@@ -68,25 +65,25 @@ fn load(env: &Env) -> Result<Channel, Error> {
         .ok_or(Error::NotInitialized)
 }
 
-fn raw_contract_id(env: &Env) -> BytesN<32> {
-    // ScVal(Address(Contract(hash))) XDR ends with the 32-byte contract hash.
-    let xdr = env.current_contract_address().to_xdr(env);
-    let n = xdr.len();
-    let mut out = [0u8; 32];
-    xdr.slice(n - 32..n).copy_into_slice(&mut out);
-    BytesN::from_array(env, &out)
+/// Same shape as upstream one-way-channel `Commitment`; soroban encodes the
+/// struct as a map with keys sorted ascending: amount, channel, domain, network.
+#[contracttype]
+pub struct Commitment {
+    domain: Symbol,
+    network: BytesN<32>,
+    channel: Address,
+    amount: i128,
 }
 
-/// Builds the signed preimage. MUST match `buildPreimage` in the TS SDK.
-pub fn voucher_preimage(env: &Env, ch: &Channel, cumulative: i128) -> Bytes {
-    let mut b = Bytes::from_slice(env, DOMAIN);
-    b.push_back(0);
-    b.append(&Bytes::from(env.ledger().network_id()));
-    b.append(&Bytes::from(raw_contract_id(env)));
-    b.append(&Bytes::from(ch.payer_key.clone()));
-    b.append(&Bytes::from(ch.provider_key.clone()));
-    b.append(&Bytes::from_array(env, &(cumulative as u128).to_be_bytes()));
-    b
+/// Bytes the payer signs for a cumulative `amount` on this channel.
+pub fn voucher_preimage(env: &Env, cumulative: i128) -> Bytes {
+    Commitment {
+        domain: symbol_short!("chancmmt"),
+        network: env.ledger().network_id(),
+        channel: env.current_contract_address(),
+        amount: cumulative,
+    }
+    .to_xdr(env)
 }
 
 #[contractimpl]
@@ -99,7 +96,6 @@ impl SidebandChannel {
         payer: Address,
         provider: Address,
         payer_key: BytesN<32>,
-        provider_key: BytesN<32>,
         deposit: i128,
         expires_at: u64,
     ) -> Result<(), Error> {
@@ -118,7 +114,6 @@ impl SidebandChannel {
                 payer,
                 provider,
                 payer_key,
-                provider_key,
                 deposit,
                 expires_at,
                 status: Status::Open,
@@ -140,7 +135,7 @@ impl SidebandChannel {
         if cumulative <= 0 || cumulative > ch.deposit {
             return Err(Error::OverDeposit);
         }
-        let pre = voucher_preimage(&env, &ch, cumulative);
+        let pre = voucher_preimage(&env, cumulative);
         // Traps (aborts the invocation) on an invalid signature.
         env.crypto().ed25519_verify(&ch.payer_key, &pre, &signature);
 

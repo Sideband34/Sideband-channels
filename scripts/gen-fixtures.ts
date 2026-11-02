@@ -8,7 +8,7 @@ import { Keypair, StrKey } from '@stellar/stellar-sdk';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import {
   NETWORK_PASSPHRASES,
-  VOUCHER_DOMAIN,
+  COMMITMENT_DOMAIN,
   VOUCHER_FORMAT,
   buildPreimage,
   networkId,
@@ -31,8 +31,9 @@ export function buildVectors() {
   const amounts = ['0.0000001', '1', '2.5', '10'];
   return {
     format: VOUCHER_FORMAT,
-    domainTag: VOUCHER_DOMAIN,
-    warning: 'SYNTHETIC test vectors. Test format, not audited, not upstream-compatible.',
+    domainTag: COMMITMENT_DOMAIN,
+    warning:
+      'SYNTHETIC test vectors. Preimage = one-way-channel Commitment XDR (sideband-commit-v2). Not audited.',
     networkPassphrase: domain.networkPassphrase,
     channelId: domain.channelId,
     networkIdHex: Buffer.from(networkId(domain.networkPassphrase)).toString('hex'),
