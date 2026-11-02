@@ -33,6 +33,13 @@ export interface TxReceipt {
   /** Opaque tx reference. For test adapters this is clearly synthetic. */
   readonly txRef: string;
   readonly synthetic: boolean;
+  /** Ledger the transaction was applied in. Present only for real chain adapters. */
+  readonly ledger?: number;
+}
+
+export interface TxLookup {
+  status: 'SUCCESS' | 'FAILED' | 'NOT_FOUND';
+  ledger?: number;
 }
 
 export interface SettleResult extends TxReceipt {
@@ -68,6 +75,8 @@ export interface ChannelAdapter {
   close(channelId: string, voucher: Voucher): Promise<SettleResult>;
   /** Payer reclaims the deposit after expiry if the provider never closed. */
   refund(channelId: string): Promise<SettleResult>;
+  /** Looks a transaction up by hash (for reconciliation). Optional. */
+  findTransaction?(txHash: string): Promise<TxLookup>;
 }
 
 /**

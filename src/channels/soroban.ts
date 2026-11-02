@@ -21,6 +21,7 @@ import {
   type ChannelStatus,
   type OpenParams,
   type SettleResult,
+  type TxLookup,
   type TxReceipt,
 } from './types.js';
 
@@ -103,6 +104,10 @@ export interface SorobanClient {
   readChannel(contractId: string): Promise<xdr.ScVal | undefined>;
   /** Deploys an instance of an uploaded wasm; returns the new contract id. */
   deploy(args: { wasmHash: Uint8Array; salt: Uint8Array; source: Keypair }): Promise<string>;
+  /** Looks a transaction up by hash; NOT_FOUND means unknown, not failed. */
+  getTransaction(
+    hash: string,
+  ): Promise<{ status: 'SUCCESS' | 'FAILED' | 'NOT_FOUND'; ledger?: number }>;
   /**
    * Builds, signs and submits a contract call, waits for the result.
    * Must throw SubmissionTimeoutError (with the hash) if the outcome is unknown.
@@ -144,7 +149,7 @@ export class SorobanChannelAdapter implements ChannelAdapter {
   }
 
   private receipt(r: InvokeResult): TxReceipt {
-    return { txRef: r.hash, synthetic: false };
+    return { txRef: r.hash, synthetic: false, ledger: r.ledger };
   }
 
   private async call(
@@ -222,6 +227,10 @@ export class SorobanChannelAdapter implements ChannelAdapter {
       toProvider: after.settledToProvider ?? 0n,
       toPayer: after.refundedToPayer ?? 0n,
     } satisfies SettleResult;
+  }
+
+  async findTransaction(txHash: string): Promise<TxLookup> {
+    return this.c.client.getTransaction(txHash);
   }
 
   close(channelId: string, voucher: Voucher): Promise<SettleResult> {
@@ -325,6 +334,17 @@ export class RpcSorobanClient implements SorobanClient {
     }
     // NOT_FOUND after the polling budget: unknown, never "failed".
     throw new SubmissionTimeoutError(hash);
+  }
+
+  async getTransaction(hash: string) {
+    try {
+      const g = await this.server.getTransaction(hash);
+      return g.status === 'SUCCESS' || g.status === 'FAILED'
+        ? { status: g.status, ledger: g.ledger }
+        : { status: 'NOT_FOUND' as const };
+    } catch {
+      return { status: 'NOT_FOUND' as const }; // unreachable RPC => unknown
+    }
   }
 
   async deploy(a: { wasmHash: Uint8Array; salt: Uint8Array; source: Keypair }): Promise<string> {

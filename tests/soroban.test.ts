@@ -61,6 +61,10 @@ class FakeClient implements SorobanClient {
   async readChannel() {
     return this.state;
   }
+  txs = new Map<string, { status: 'SUCCESS' | 'FAILED' | 'NOT_FOUND'; ledger?: number }>();
+  async getTransaction(h: string) {
+    return this.txs.get(h) ?? { status: 'NOT_FOUND' as const };
+  }
   async deploy() {
     this.deployed++;
     return CHANNEL;
@@ -248,6 +252,14 @@ describe('SorobanChannelAdapter (fake client)', () => {
     await expect(adapter(stale).close(CHANNEL, v)).rejects.toBeInstanceOf(SubmissionTimeoutError);
   });
 
+  it('findTransaction exposes lookups; unknown stays NOT_FOUND', async () => {
+    const c = new FakeClient();
+    c.txs.set('abc', { status: 'SUCCESS', ledger: 9 });
+    const a = adapter(c);
+    expect(await a.findTransaction('abc')).toEqual({ status: 'SUCCESS', ledger: 9 });
+    expect(await a.findTransaction('nope')).toEqual({ status: 'NOT_FOUND' });
+  });
+
   it('refund is signed by the payer; unknown channel is not_found', async () => {
     const c = new FakeClient();
     c.state = channelScVal({ status: 'Open' });
@@ -342,6 +354,23 @@ describe('RpcSorobanClient (fake rpc server)', () => {
       2,
     );
     expect(await down.invoke(args).catch((e) => e)).toBeInstanceOf(SubmissionTimeoutError);
+  });
+
+  it('getTransaction maps statuses and treats RPC errors as unknown', async () => {
+    const mk = (g: () => Promise<unknown>) =>
+      new RpcSorobanClient(server({ getTransaction: g }), TESTNET, payerKp.publicKey());
+    expect(await mk(async () => ({ status: 'SUCCESS', ledger: 3 })).getTransaction('h')).toEqual({
+      status: 'SUCCESS',
+      ledger: 3,
+    });
+    expect(await mk(async () => ({ status: 'NOT_FOUND' })).getTransaction('h')).toEqual({
+      status: 'NOT_FOUND',
+    });
+    expect(
+      await mk(async () => {
+        throw new Error('down');
+      }).getTransaction('h'),
+    ).toEqual({ status: 'NOT_FOUND' });
   });
 
   it('reports FAILED on-chain and rejected submissions as failures', async () => {
