@@ -24,3 +24,11 @@ jobs:
         working-directory: contracts
       - run: cargo test
         working-directory: contracts
+      - run: rustup target add wasm32v1-none
+      - name: Build WASM (cargo fallback; see README for the stellar-cli path)
+        run: cargo build --release --target wasm32v1-none -p sideband-channel
+        working-directory: contracts
+        env:
+          SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2: '1'
+      - run: test -s target/wasm32v1-none/release/sideband_channel.wasm
+        working-directory: contracts

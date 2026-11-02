@@ -53,13 +53,25 @@ The project uses the **approved flat SVG logo** in [`brand/icon.svg`](./brand/ic
 - `contracts/channel`: Soroban reference contract (`init` / provider `close` / payer `refund` after expiry) with Rust tests run in the Soroban test environment, including TS-signed golden vectors, wrong network, wrong channel, tamper, double close and provider-shutdown refund.
 - Network policy: public network refused, unknown passphrases fail closed.
 
-**Verified:** `npm run check` (prettier, eslint, tsc, 32 vitest tests) and `cd contracts && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` (9 tests).
+**Verified:** `npm run check` (prettier, eslint, tsc, 32 vitest tests) and `cd contracts && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` (9 tests); `npm run check` runs 50 tests.
 
 **NOT done / unverified**
 
 - No Testnet deployment, no real transaction hashes: the Soroban RPC adapter does not exist yet, and the contract has only been run in the SDK test environment (the WASM build needs `stellar-cli`, not run here).
 - The voucher bytes follow the upstream one-way-channel commitment layout (not yet checked against a live upstream contract on Testnet; upstream is unaudited) (see `docs/adr/0001-voucher-test-format.md`). Testnet/synthetic only.
 - Dev-tooling `npm audit` reports a moderate `minimatch` advisory via eslint; production dependencies are unaffected.
+
+## Building the WASM contract
+
+```
+rustup target add wasm32v1-none
+cd contracts
+stellar contract build            # recommended (stellar-cli >= 25.2)
+# Fallback without stellar-cli (what CI runs; produced a ~21 KB .wasm locally):
+SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
+  cargo build --release --target wasm32v1-none -p sideband-channel
+```
+The fallback sets the flag stellar-cli would set; the artifact has not been deployed or inspected with stellar-cli, so treat it as a build check only. Upload/deploy to Testnet is not automated or tested here.
 
 ## Quick start
 
