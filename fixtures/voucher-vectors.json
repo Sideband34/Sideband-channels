@@ -4,6 +4,7 @@
   "warning": "SYNTHETIC test vectors. Test format, not audited, not upstream-compatible.",
   "networkPassphrase": "Test SDF Network ; September 2015",
   "channelId": "CAEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEEQTD2L",
+  "networkIdHex": "cee0302d59844d32bdca915c8203dd44b33fbb7edc19051ea37abedf28ecd472",
   "channelIdHex": "0909090909090909090909090909090909090909090909090909090909090909",
   "payer": "GCFIRY65OQE7DFP5KLNS2PF2LVZMUZYJX4OZIEQ36N2IQANUB5XVYOJR",
   "payerPublicKeyHex": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",

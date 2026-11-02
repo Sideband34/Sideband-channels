@@ -11,6 +11,7 @@ import {
   VOUCHER_DOMAIN,
   VOUCHER_FORMAT,
   buildPreimage,
+  networkId,
   createVoucher,
   keypairSigner,
 } from '../src/index.js';
@@ -34,6 +35,7 @@ export function buildVectors() {
     warning: 'SYNTHETIC test vectors. Test format, not audited, not upstream-compatible.',
     networkPassphrase: domain.networkPassphrase,
     channelId: domain.channelId,
+    networkIdHex: Buffer.from(networkId(domain.networkPassphrase)).toString('hex'),
     channelIdHex: channelRaw.toString('hex'),
     payer: domain.payer,
     payerPublicKeyHex: Buffer.from(StrKey.decodeEd25519PublicKey(domain.payer)).toString('hex'),

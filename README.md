@@ -4,7 +4,7 @@
 
 > Sideband — Nearby services. Metered value. Stellar settlement.
 
-**Status: repository scaffold / not implemented.** This repo is one of **exactly four meaningful independent codebases** in the Sideband Stellar-native project. It is not a placeholder created merely to increase Drips Wave submissions.
+**Status: M0/M1 core implemented (see Status section below); Testnet integration NOT done.** This repo is one of **exactly four meaningful independent codebases** in the Sideband Stellar-native project. It is not a placeholder created merely to increase Drips Wave submissions.
 
 ## Owns
 Stellar channel deployment/adapters, prefunding, domain-separated cumulative commitments, close/refund, on-chain settlement and contract tests
@@ -41,3 +41,40 @@ Stellar is essential: An online setup transaction deposits a supported Stellar a
 ## Official project identity
 
 The project uses the **approved flat SVG logo** in [`brand/icon.svg`](./brand/icon.svg), with an editable transparent vector mark in [`brand/mark.svg`](./brand/mark.svg). The [512 px GitHub organization avatar](./brand/org-avatar.png) is in the same directory. This logo is shared by all four project repositories. UI design remains intentionally flexible.
+
+
+## Status: M0/M1 core (v0.1.0)
+
+**Implemented and tested**
+
+- `src/vouchers`: domain-separated cumulative voucher creation/verification (ed25519 via `@stellar/stellar-sdk`), binding network, channel, payer and provider. Atomic compare-and-swap acceptance (`acceptVoucher` + `VoucherStore`): replay, rollback, over-deposit, over-budget, expiry, wrong network/channel, tamper and concurrent-race cases.
+- `src/channels`: `ChannelAdapter` interface + `InMemoryChannelAdapter`, a **labeled test adapter** (every receipt is `synthetic: true`; no ledger).
+- `src/settlement`: settlement intent state machine (`CREATED -> AUTHORIZED -> SUBMITTED -> CONFIRMED`, `RECONCILING` after a post-submit timeout; `CONFIRMED` needs finality evidence for the right network).
+- `contracts/channel`: Soroban reference contract (`init` / provider `close` / payer `refund` after expiry) with Rust tests run in the Soroban test environment, including TS-signed golden vectors, wrong network, wrong channel, tamper, double close and provider-shutdown refund.
+- Network policy: public network refused, unknown passphrases fail closed.
+
+**Verified:** `npm run check` (prettier, eslint, tsc, 32 vitest tests) and `cd contracts && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` (9 tests).
+
+**NOT done / unverified**
+
+- No Testnet deployment, no real transaction hashes: the Soroban RPC adapter does not exist yet, and the contract has only been run in the SDK test environment (the WASM build needs `stellar-cli`, not run here).
+- The voucher layout is `sideband-test-format-v1`, **not** upstream `one-way-channel`/`stellar-mpp-sdk` compatible and **not audited** (see `docs/adr/0001-voucher-test-format.md`). Testnet/synthetic only.
+- Dev-tooling `npm audit` reports a moderate `minimatch` advisory via eslint; production dependencies are unaffected.
+
+## Quick start
+
+```
+npm ci
+npm run check          # format, lint, typecheck, tests
+npm run fixtures       # regenerate fixtures/voucher-vectors.json
+npx tsx examples/offline-session.ts
+cd contracts && cargo test
+```
+
+## Siblings and compatibility
+
+| Repo | Contract |
+|---|---|
+| `sideband-protocol` v0.1.0 | `VoucherFrame {channelRef, cumulativeAmount, commitment, signature}`: `cumulativeAmount` uses the same canonical 7-decimal string; `commitment` = hex sha256(preimage), `signature` = hex ed25519 |
+| `sideband-gateway` | consumes `acceptVoucher`, `VoucherStore`, `prepareSettlement` |
+| `sideband-mobile` | needs a Dart port of `buildPreimage`/signing, validated against `fixtures/voucher-vectors.json` |
