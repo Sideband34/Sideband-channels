@@ -1,0 +1,44 @@
+name: Feature request
+description: Propose a change scoped to Sideband-channels.
+title: '[feature] '
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Sideband keeps one responsibility per repository. If your idea belongs to a sibling
+        (protocol, channels, gateway or mobile), please open it there. See
+        docs/CONTRIBUTOR_ISSUES.md for work that is already scoped.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: Who needs this and why? Link the PRD or roadmap item if there is one.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Interfaces touched (API, frames, voucher bytes, contract ABI, UI).
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance tests
+      description: How we will know it works, including failure paths.
+    validations:
+      required: true
+  - type: textarea
+    id: non-goals
+    attributes:
+      label: Non-goals and risks
+      description: Anything this must not do (e.g. claim settlement before on-chain finality).
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: This does not require real funds, Mainnet or production credentials.
+          required: true

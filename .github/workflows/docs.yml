@@ -5,10 +5,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate scaffold metadata
+      - name: Validate required project documents
         run: |
           test -s README.md
           test -s AGENTS.md
           test -s docs/PROJECT_MASTER.md
           test -s docs/ARCHITECTURE.md
           test -s brand/icon.svg
+          test -s SECURITY.md
+          test -s CODE_OF_CONDUCT.md
+          test -s CONTRIBUTING.md
+          test -s docs/CONTRIBUTOR_ISSUES.md

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/Sideband34/Sideband-channels/security/advisories/new
+    about: Please report security issues privately. See SECURITY.md.
+  - name: Scoped contributor work
+    url: https://github.com/Sideband34/Sideband-channels/blob/main/docs/CONTRIBUTOR_ISSUES.md
+    about: Work items already scoped with acceptance tests.
