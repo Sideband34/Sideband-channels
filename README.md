@@ -1,92 +1,178 @@
-<img src="./brand/icon.svg" alt="Sideband logo" width="144" />
+<div align="center">
 
-# sideband-channels
+<img src="./brand/icon.svg" alt="Sideband logo" width="112" />
 
-> Sideband — Nearby services. Metered value. Stellar settlement.
+# Sideband Channels
 
-**Status: M0/M1 core implemented (see Status section below); Testnet integration NOT done.** This repo is one of **exactly four meaningful independent codebases** in the Sideband Stellar-native project. It is not a placeholder created merely to increase Drips Wave submissions.
+**Stellar payment channels and cumulative vouchers for offline, metered payments.**
 
-## Owns
-Stellar channel deployment/adapters, prefunding, domain-separated cumulative commitments, close/refund, on-chain settlement and contract tests
+Part of [Sideband](#how-sideband-works): nearby services, metered value, Stellar settlement.
 
-## Why it is separate
-It has a distinct runtime/toolchain, external interface, tests, release cadence and maintainership boundary. Its siblings depend on its delivered interface, but implementation responsibilities must not be duplicated.
+[![CI](https://github.com/Sideband34/Sideband-channels/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Sideband34/Sideband-channels/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-FF8B24.svg)](./LICENSE)
+[![Status: pre-release](https://img.shields.io/badge/status-pre--release-130B12.svg)](#status)
+[![Network: Stellar Testnet only](https://img.shields.io/badge/network-Stellar%20Testnet%20only-130B12.svg)](./SECURITY.md)
 
-## Sibling repositories
-- `sideband-mobile` — Nearby service discovery UX, local sessions, payer/provider modes, secure signing, spending limits, usage history and receipts
-- `sideband-protocol` — BLE/local-Wi-Fi discovery, pairing, authenticated session frames, transport retries, metering message schema, backpressure and session IDs
-- `sideband-gateway` — Local service hosting, provider authentication, usage meter, anti-replay voucher validation, metered-demo service, settlement preparation, product marketing web
+[How it works](#how-sideband-works) · [Quickstart](#quickstart) · [Status](#status) · [Architecture](#architecture) · [Contributing](#contributing) · [Security](#security)
 
-## Architecture and development context
-Start with:
-- `AGENTS.md` — coding agent rules;
-- `docs/PRD.md` — product purpose and MVP;
-- `docs/SRD.md` — user/system requirements, APIs and state;
-- `docs/ARCHITECTURE.md` — four-repository responsibilities, data and execution paths;
-- `docs/TECHNICAL_BUILD.md` — recommended bootstrap, testing, phases;
-- `docs/SECURITY.md` — security/trust boundaries;
-- `docs/BRAND.md` — approved flat logo and flexible UI direction;
-- `docs/ROADMAP.md` — milestone acceptance gates.
+</div>
 
-## Technical target
-Rust contract integration + TS SDK. The actual product implementation starts at milestone M0; no real-money transactions or claims exist in this scaffold.
+> [!WARNING]
+> Pre-release software for **Stellar Testnet and synthetic assets only**. The channel contract and
+> voucher format are **unaudited**. Do not use with real funds.
 
-## Minimal integration contract
-Always test the dependency path stated in ARCHITECTURE.md. Every new public endpoint/ABI/package message must be versioned and covered by consumer fixtures. See `docs/SRD.md` and `docs/TECHNICAL_BUILD.md`.
+## What this repository is
 
-## Drips Wave
-Stellar is essential: An online setup transaction deposits a supported Stellar asset into a Soroban one-way payment channel bound to a provider and payer commitment key. Approval/eligibility for Wave depends on substantive open-source implementation and organizer review, not repo count.
+The payment layer of Sideband: a Soroban one-way payment channel contract and a TypeScript SDK
+that every other component uses to create, verify and settle vouchers.
 
+- **Vouchers** (`src/vouchers`): domain-separated cumulative commitments (ed25519 via
+  `@stellar/stellar-sdk`) bound to network, channel, payer and provider, using the upstream
+  one-way-channel commitment layout. `acceptVoucher` + `VoucherStore` give atomic
+  compare-and-swap acceptance and reject replay, rollback, over-deposit, over-budget, expiry,
+  wrong network/channel and tampering, including concurrent races.
+- **Channel adapters** (`src/channels`): a `ChannelAdapter` interface with an
+  `InMemoryChannelAdapter` (labelled test adapter; every receipt is `synthetic: true`) and a
+  `SorobanChannelAdapter` with an RPC client, exercised against a fake chain client.
+- **Settlement intents** (`src/settlement`): `CREATED → AUTHORIZED → SUBMITTED → CONFIRMED`, with
+  `RECONCILING` after a post-submit timeout; `CONFIRMED` requires finality evidence for the right
+  network.
+- **Soroban contract** (`contracts/channel`): `init`, provider `close`, payer `refund` after
+  expiry, with Rust tests in the Soroban test environment using TS-signed golden vectors.
+- **Network policy:** the public network is refused; unknown passphrases fail closed.
 
-## Official project identity
+## Quickstart
 
-The project uses the **approved flat SVG logo** in [`brand/icon.svg`](./brand/icon.svg), with an editable transparent vector mark in [`brand/mark.svg`](./brand/mark.svg). The [512 px GitHub organization avatar](./brand/org-avatar.png) is in the same directory. This logo is shared by all four project repositories. UI design remains intentionally flexible.
+Requires Node 22+; the contract needs a stable Rust toolchain.
 
-
-## Status: M0/M1 core (v0.1.0)
-
-**Implemented and tested**
-
-- `src/vouchers`: domain-separated cumulative voucher creation/verification (ed25519 via `@stellar/stellar-sdk`), binding network, channel, payer and provider. Atomic compare-and-swap acceptance (`acceptVoucher` + `VoucherStore`): replay, rollback, over-deposit, over-budget, expiry, wrong network/channel, tamper and concurrent-race cases.
-- `src/channels`: `ChannelAdapter` interface + `InMemoryChannelAdapter`, a **labeled test adapter** (every receipt is `synthetic: true`; no ledger).
-- `src/settlement`: settlement intent state machine (`CREATED -> AUTHORIZED -> SUBMITTED -> CONFIRMED`, `RECONCILING` after a post-submit timeout; `CONFIRMED` needs finality evidence for the right network).
-- `contracts/channel`: Soroban reference contract (`init` / provider `close` / payer `refund` after expiry) with Rust tests run in the Soroban test environment, including TS-signed golden vectors, wrong network, wrong channel, tamper, double close and provider-shutdown refund.
-- Network policy: public network refused, unknown passphrases fail closed.
-
-**Verified:** `npm run check` (prettier, eslint, tsc, 32 vitest tests) and `cd contracts && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` (9 tests); `npm run check` runs 50 tests.
-
-**NOT done / unverified**
-
-- No Testnet deployment, no real transaction hashes: the Soroban RPC adapter does not exist yet, and the contract has only been run in the SDK test environment (the WASM build needs `stellar-cli`, not run here).
-- The voucher bytes follow the upstream one-way-channel commitment layout (not yet checked against a live upstream contract on Testnet; upstream is unaudited) (see `docs/adr/0001-voucher-test-format.md`). Testnet/synthetic only.
-- Dev-tooling `npm audit` reports a moderate `minimatch` advisory via eslint; production dependencies are unaffected.
-
-## Building the WASM contract
-
+```bash
+git clone https://github.com/Sideband34/Sideband-channels && cd Sideband-channels
+npm ci
+npm run check                    # prettier, eslint, tsc, 50 vitest tests
+npx tsx examples/offline-session.ts
+npm run fixtures                 # regenerate fixtures/voucher-vectors.json
+cd contracts && cargo test       # 9 contract tests
 ```
+
+### Building the WASM contract
+
+```bash
 rustup target add wasm32v1-none
 cd contracts
 stellar contract build            # recommended (stellar-cli >= 25.2)
-# Fallback without stellar-cli (what CI runs; produced a ~21 KB .wasm locally):
+# Fallback without stellar-cli (what CI runs):
 SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1 \
   cargo build --release --target wasm32v1-none -p sideband-channel
 ```
-The fallback sets the flag stellar-cli would set; the artifact has not been deployed or inspected with stellar-cli, so treat it as a build check only. Upload/deploy to Testnet is not automated or tested here.
 
-## Quick start
+The fallback sets the flag stellar-cli would set; treat the artifact as a build check only.
+Upload/deploy to Testnet is not automated or tested yet.
 
-```
-npm ci
-npm run check          # format, lint, typecheck, tests
-npm run fixtures       # regenerate fixtures/voucher-vectors.json
-npx tsx examples/offline-session.ts
-cd contracts && cargo test
-```
+## Status
 
-## Siblings and compatibility
-
-| Repo | Contract |
+| Area | Status |
 |---|---|
-| `sideband-protocol` v0.1.0 | `VoucherFrame {channelRef, cumulativeAmount, commitment, signature}`: `cumulativeAmount` uses the same canonical 7-decimal string; `commitment` = hex sha256(preimage), `signature` = hex ed25519 |
-| `sideband-gateway` | consumes `acceptVoucher`, `VoucherStore`, `prepareSettlement` |
-| `sideband-mobile` | needs a Dart port of `buildPreimage`/signing, validated against `fixtures/voucher-vectors.json` |
+| Voucher format, verification, CAS acceptance | Implemented, tested |
+| Settlement intent state machine | Implemented, tested |
+| In-memory channel adapter | Implemented (synthetic receipts only) |
+| Soroban adapter + RPC client | Implemented, tested against a fake chain client only |
+| Soroban contract | Implemented, tested in the SDK environment; WASM builds in CI |
+| Testnet deployment / real transaction hashes | **Not done** |
+| Security audit | **None** (upstream one-way-channel is also unaudited) |
+
+The voucher bytes follow the upstream one-way-channel commitment layout but have not been checked
+against a live upstream contract on Testnet; see
+[`docs/adr/0001-voucher-test-format.md`](./docs/adr/0001-voucher-test-format.md).
+
+### Compatibility
+
+| Repository | Contract |
+|---|---|
+| [Sideband-protocol](https://github.com/Sideband34/Sideband-protocol) v0.1.0 | `VoucherFrame {channelRef, cumulativeAmount, commitment, signature}` with the canonical 7-decimal amount; `commitment` = hex sha256(preimage), `signature` = hex ed25519 |
+| [Sideband-gateway](https://github.com/Sideband34/Sideband-gateway) | consumes `acceptVoucher`, `VoucherStore`, `prepareSettlement`, `SorobanChannelAdapter` |
+| [Sideband-mobile](https://github.com/Sideband34/Sideband-mobile) | Dart port of the commitment and signing, checked against `fixtures/voucher-vectors.json` |
+
+## How Sideband works
+
+Sideband lets a phone pay a nearby device for a small metered service (for example, text
+processing priced per word) over Bluetooth LE or local Wi-Fi, without needing the internet during
+the session:
+
+1. **Fund a channel (online).** The payer deposits a Testnet asset into a Soroban payment channel
+   bound to one provider.
+2. **Discover nearby.** Devices find each other locally, verify the provider's signed service
+   manifest, and agree on price, units and a spending cap.
+3. **Stream with signed vouchers (offline).** Each metered unit is paid with a cumulative,
+   domain-separated voucher signed on the phone. The provider verifies it locally and rejects
+   replays and rollbacks.
+4. **Settle later (online).** The provider submits its highest voucher on-chain; the rest of the
+   deposit is refundable to the payer after expiry.
+
+A voucher is a commitment against already-locked funds, **not** a completed payment. Nothing is
+shown as settled until Stellar confirms it.
+
+## Architecture
+
+Four repositories, one responsibility each. No payment signing lives in transport code, and no
+chain logic lives in the app. This repository is highlighted.
+
+```mermaid
+flowchart LR
+  subgraph phone["Payer phone"]
+    M["Sideband-mobile<br/>Flutter app"]
+  end
+  subgraph provider["Provider device"]
+    G["Sideband-gateway<br/>TypeScript runtime"]
+  end
+  P["Sideband-protocol<br/>Dart frames + state machine"]
+  C["Sideband-channels<br/>Soroban contract + TS SDK"]
+  S[("Stellar Testnet")]
+  M -->|"frames, session rules"| P
+  G -->|"frame schema + limits"| P
+  M <-.->|"BLE / local Wi-Fi:<br/>offer, meter, vouchers"| G
+  M -->|"voucher format<br/>(Dart port, golden vectors)"| C
+  G -->|"verify vouchers,<br/>prepare settlement"| C
+  C -->|"fund / close / refund"| S
+  classDef current fill:#FF8B24,color:#130B12,stroke:#130B12,stroke-width:2px
+  class C current
+```
+
+| Repository | Stack | Responsibility |
+|---|---|---|
+| [Sideband-mobile](https://github.com/Sideband34/Sideband-mobile) | Flutter | Payer app: discovery UX, spend limits, voucher signing, history and receipts |
+| [Sideband-protocol](https://github.com/Sideband34/Sideband-protocol) | Dart | Versioned session frames, canonical encoding, session state machine, metering, transport contract |
+| [Sideband-gateway](https://github.com/Sideband34/Sideband-gateway) | TypeScript | Provider runtime: signed manifest, metered service, anti-replay voucher validation, settlement prep, landing site |
+| [**Sideband-channels**](https://github.com/Sideband34/Sideband-channels) | Rust · TypeScript | Soroban payment channel contract, cumulative voucher format, channel adapters, settlement intents |
+
+Cross-repo contracts are pinned with fixtures: voucher golden vectors from `Sideband-channels`,
+and a synthetic session transcript from `Sideband-gateway`. See
+[`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for data and ownership paths.
+
+## Contributing
+
+Contributions are welcome. Start with [CONTRIBUTING.md](./CONTRIBUTING.md) for the local checks and
+workflow, and pick from the scoped work in
+[docs/CONTRIBUTOR_ISSUES.md](./docs/CONTRIBUTOR_ISSUES.md): each item lists its interfaces,
+acceptance tests and size. Please follow the [Code of Conduct](./CODE_OF_CONDUCT.md).
+
+**Drips Wave.** Sideband intends to participate in
+[Drips Wave](https://docs.drips.network/wave/maintainers/participating-in-a-wave/) on Stellar.
+Participation and rewards depend on organizer approval and are not guaranteed. Wave issues are
+real, scoped work in this repository's boundary, never filler.
+
+## Security
+
+Please report vulnerabilities privately; see [SECURITY.md](./SECURITY.md). The threat model is
+in [docs/SECURITY.md](./docs/SECURITY.md). Never post keys or seeds in issues, even Testnet ones.
+
+## Project documents
+
+[PRD](./docs/PRD.md) · [Requirements](./docs/SRD.md) · [Architecture](./docs/ARCHITECTURE.md) ·
+[Stellar protocol](./docs/STELLAR_PROTOCOL.md) · [Roadmap](./docs/ROADMAP.md) ·
+[Brand](./docs/BRAND.md) · [Agent rules](./AGENTS.md)
+
+The approved logo is in [`brand/`](./brand) and shared by all four repositories.
+
+## License
+
+[MIT](./LICENSE)
