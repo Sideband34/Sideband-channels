@@ -33,12 +33,17 @@ that every other component uses to create, verify and settle vouchers.
   wrong network/channel and tampering, including concurrent races.
 - **Channel adapters** (`src/channels`): a `ChannelAdapter` interface with an
   `InMemoryChannelAdapter` (labelled test adapter; every receipt is `synthetic: true`) and a
-  `SorobanChannelAdapter` with an RPC client, exercised against a fake chain client.
+  `SorobanChannelAdapter` with an RPC client, exercised against a fake chain client. Both
+  implement `open`, `topUp`, `settle`, `close`, `closeStart` and `refund`.
 - **Settlement intents** (`src/settlement`): `CREATED → AUTHORIZED → SUBMITTED → CONFIRMED`, with
   `RECONCILING` after a post-submit timeout; `CONFIRMED` requires finality evidence for the right
   network.
-- **Soroban contract** (`contracts/channel`): `init`, provider `close`, payer `refund` after
-  expiry, with Rust tests in the Soroban test environment using TS-signed golden vectors.
+- **Soroban contract** (`contracts/channel`): `init`, payer `top_up`, provider `settle` (withdraw
+  without closing) and `close`, payer `close_start` with a dispute window in which the provider can
+  still submit a higher voucher, then `refund` of the remainder. Checked arithmetic, auth on every
+  path, terminal single-close, events, and `prepare_commitment` for encoder parity
+  ([ADR 0002](docs/adr/0002-channel-lifecycle.md)). Rust tests use the TS golden vectors plus a
+  funds-conservation property test.
 - **Network policy:** the public network is refused; unknown passphrases fail closed.
 
 ## Quickstart
@@ -105,8 +110,10 @@ the session:
 3. **Stream with signed vouchers (offline).** Each metered unit is paid with a cumulative,
    domain-separated voucher signed on the phone. The provider verifies it locally and rejects
    replays and rollbacks.
-4. **Settle later (online).** The provider submits its highest voucher on-chain; the rest of the
-   deposit is refundable to the payer after expiry.
+4. **Settle later (online).** The provider withdraws up to its highest voucher on-chain, either
+   keeping the channel open (`settle`) or closing it (`close`, which refunds the rest). A payer
+   can start a close at any time; the provider then has a dispute window to submit its highest
+   voucher before the payer reclaims the remainder.
 
 A voucher is a commitment against already-locked funds, **not** a completed payment. Nothing is
 shown as settled until Stellar confirms it.

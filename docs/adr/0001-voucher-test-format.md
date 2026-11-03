@@ -31,10 +31,9 @@ sha256(preimage) and `signature` stays the hex ed25519 signature.
   verified against an upstream contract instance on Testnet (no network run).
   Upstream's `commitment-parity` live test should be mirrored once Testnet
   deployment exists.
-- Our reference contract is NOT upstream: it has a single-shot `close` and a
-  payer `refund` after expiry, without upstream's `settle`, `top_up`,
-  `close_start` and refund waiting period. For real use prefer deploying the
-  upstream contract (its wasm is in stellar-mpp-sdk fixtures) and treating this
-  contract as a test double.
+- Our reference contract is NOT upstream. Since ADR 0002 it has upstream's
+  `top_up`, `settle`, `close_start` and waiting period; the remaining
+  differences are listed there. For real use still prefer reviewing and
+  deploying the upstream contract.
 - Format changes bump the tag (`sideband-commit-v3`) and regenerate fixtures;
   gateway and mobile pin the fixture.
