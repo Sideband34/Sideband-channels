@@ -15,14 +15,19 @@ import { parseAmount } from '../amount.js';
 import type { Voucher } from '../vouchers/voucher.js';
 import {
   ChannelError,
+  DEFAULT_CLOSE_WAIT,
   SubmissionTimeoutError,
+  isTerminal,
   type ChannelAdapter,
   type ChannelBinding,
   type ChannelStatus,
+  type CloseStartResult,
   type OpenParams,
   type SettleResult,
+  type TopUpResult,
   type TxLookup,
   type TxReceipt,
+  type WithdrawResult,
 } from './types.js';
 
 /** Contract `Error` discriminants of contracts/channel (keep in sync). */
@@ -32,7 +37,11 @@ const CONTRACT_ERRORS: Record<number, ChannelError['code']> = {
   3: 'invalid_params', // InvalidParams
   4: 'already_settled', // NotOpen
   5: 'invalid_voucher', // OverDeposit
-  6: 'not_expired', // NotExpired
+  6: 'not_expired', // NotExpired (dispute window / expiry not elapsed)
+  7: 'stale_voucher', // StaleVoucher
+  8: 'not_closing', // NotClosing
+  9: 'invalid_params', // Overflow
+  10: 'already_closing', // AlreadyClosing
 };
 
 /** Maps a Soroban simulation/transaction error string to a ChannelError. */
@@ -54,10 +63,14 @@ export interface RawChannel {
   provider: string;
   deposit: bigint;
   expires_at: bigint;
-  status: ['Open'] | ['Closed'] | ['Refunded'];
+  close_wait: bigint;
+  close_effective_at: bigint;
+  status: ['Open'] | ['Closing'] | ['Closed'] | ['Refunded'];
   paid_to_provider: bigint;
   refunded_to_payer: bigint;
 }
+
+const STATUSES: readonly ChannelStatus[] = ['open', 'closing', 'closed', 'refunded'];
 
 export function bindingFromScVal(
   channelId: string,
@@ -67,7 +80,7 @@ export function bindingFromScVal(
   const raw = scValToNative(value) as RawChannel;
   const status = (Array.isArray(raw.status) ? raw.status[0] : raw.status) as string;
   const lower = status.toLowerCase();
-  if (lower !== 'open' && lower !== 'closed' && lower !== 'refunded') {
+  if (!(STATUSES as readonly string[]).includes(lower)) {
     throw new ChannelError('invalid_params', `Unknown channel status ${status}`);
   }
   const s = lower as ChannelStatus;
@@ -79,8 +92,11 @@ export function bindingFromScVal(
     asset: raw.token,
     deposit: BigInt(raw.deposit),
     expiresAt: Number(raw.expires_at),
+    closeWait: Number(raw.close_wait),
     status: s,
-    ...(s !== 'open'
+    withdrawn: BigInt(raw.paid_to_provider),
+    ...(s === 'closing' ? { closeEffectiveAt: Number(raw.close_effective_at) } : {}),
+    ...(isTerminal(s)
       ? {
           settledToProvider: BigInt(raw.paid_to_provider),
           refundedToPayer: BigInt(raw.refunded_to_payer),
@@ -198,6 +214,7 @@ export class SorobanChannelAdapter implements ChannelAdapter {
         xdr.ScVal.scvBytes(Buffer.from(key)),
         nativeToScVal(p.deposit, { type: 'i128' }),
         nativeToScVal(p.expiresAt, { type: 'u64' }),
+        nativeToScVal(p.closeWait ?? DEFAULT_CLOSE_WAIT, { type: 'u64' }),
       ],
       payer,
     );
@@ -211,20 +228,34 @@ export class SorobanChannelAdapter implements ChannelAdapter {
     return v ? bindingFromScVal(channelId, this.c.networkPassphrase, v) : undefined;
   }
 
-  private async settle(channelId: string, method: 'close' | 'refund', args: xdr.ScVal[]) {
+  private async live(channelId: string): Promise<ChannelBinding> {
     const b = await this.getBinding(channelId);
     if (!b) throw new ChannelError('not_found', 'Unknown channel');
-    if (b.status !== 'open') throw new ChannelError('already_settled', `Channel is ${b.status}`);
+    if (isTerminal(b.status)) throw new ChannelError('already_settled', `Channel is ${b.status}`);
+    return b;
+  }
+
+  /** Re-reads state after an applied tx; invisible changes mean "reconcile". */
+  private async after(
+    channelId: string,
+    hash: string,
+    visible: (b: ChannelBinding) => boolean,
+  ): Promise<ChannelBinding> {
+    const b = await this.getBinding(channelId);
+    if (!b || !visible(b))
+      throw new SubmissionTimeoutError(hash, 'Applied but state not yet visible');
+    return b;
+  }
+
+  private async finish(channelId: string, method: 'close' | 'refund', args: xdr.ScVal[]) {
+    const b = await this.live(channelId);
     const source = this.signer(method === 'close' ? b.provider : b.payer);
     const r = await this.call(channelId, method, args, source);
     // SUCCESS only means the transaction applied; read the final state back.
-    const after = await this.getBinding(channelId);
-    if (!after || after.status === 'open') {
-      throw new SubmissionTimeoutError(r.hash, 'Applied but state not yet visible');
-    }
+    const after = await this.after(channelId, r.hash, (x) => isTerminal(x.status));
     return {
       ...this.receipt(r),
-      toProvider: after.settledToProvider ?? 0n,
+      toProvider: after.settledToProvider ?? after.withdrawn,
       toPayer: after.refundedToPayer ?? 0n,
     } satisfies SettleResult;
   }
@@ -233,15 +264,75 @@ export class SorobanChannelAdapter implements ChannelAdapter {
     return this.c.client.getTransaction(txHash);
   }
 
-  close(channelId: string, voucher: Voucher): Promise<SettleResult> {
-    return this.settle(channelId, 'close', [
+  private voucherArgs(voucher: Voucher): xdr.ScVal[] {
+    return [
       nativeToScVal(parseAmount(voucher.cumulativeAmount), { type: 'i128' }),
       xdr.ScVal.scvBytes(Buffer.from(voucher.signature, 'hex')),
+    ];
+  }
+
+  async topUp(channelId: string, amount: bigint): Promise<TopUpResult> {
+    if (amount <= 0n) throw new ChannelError('invalid_params', 'Top-up must be positive');
+    const b = await this.live(channelId);
+    if (b.status !== 'open') throw new ChannelError('not_open', `Channel is ${b.status}`);
+    const r = await this.call(
+      channelId,
+      'top_up',
+      [nativeToScVal(amount, { type: 'i128' })],
+      this.signer(b.payer),
+    );
+    const after = await this.after(channelId, r.hash, (x) => x.deposit >= b.deposit + amount);
+    return { ...this.receipt(r), deposit: after.deposit };
+  }
+
+  async settle(channelId: string, voucher: Voucher): Promise<WithdrawResult> {
+    const b = await this.live(channelId);
+    const target = parseAmount(voucher.cumulativeAmount);
+    if (target <= b.withdrawn) {
+      throw new ChannelError('stale_voucher', 'Voucher not above withdrawn amount');
+    }
+    const r = await this.call(
+      channelId,
+      'settle',
+      this.voucherArgs(voucher),
+      this.signer(b.provider),
+    );
+    const after = await this.after(channelId, r.hash, (x) => x.withdrawn >= target);
+    return {
+      ...this.receipt(r),
+      amount: after.withdrawn - b.withdrawn,
+      withdrawn: after.withdrawn,
+    };
+  }
+
+  async close(channelId: string, voucher: Voucher | undefined): Promise<SettleResult> {
+    if (voucher) return this.finish(channelId, 'close', this.voucherArgs(voucher));
+    const b = await this.live(channelId);
+    // Close at the already-withdrawn amount; the contract ignores the signature.
+    return this.finish(channelId, 'close', [
+      nativeToScVal(b.withdrawn, { type: 'i128' }),
+      xdr.ScVal.scvBytes(Buffer.alloc(64)),
     ]);
   }
 
-  refund(channelId: string): Promise<SettleResult> {
-    return this.settle(channelId, 'refund', []);
+  async closeStart(channelId: string): Promise<CloseStartResult> {
+    const b = await this.live(channelId);
+    if (b.status === 'closing') throw new ChannelError('already_closing', 'Already closing');
+    const r = await this.call(channelId, 'close_start', [], this.signer(b.payer));
+    const after = await this.after(channelId, r.hash, (x) => x.status !== 'open');
+    if (after.closeEffectiveAt === undefined) {
+      throw new SubmissionTimeoutError(r.hash, 'Closing state not visible');
+    }
+    return { ...this.receipt(r), closeEffectiveAt: after.closeEffectiveAt };
+  }
+
+  async refund(channelId: string): Promise<SettleResult> {
+    const b = await this.live(channelId);
+    if (b.status === 'open') throw new ChannelError('not_closing', 'Call closeStart first');
+    if (this.c.now() < (b.closeEffectiveAt ?? Infinity)) {
+      throw new ChannelError('not_expired', 'Dispute window still open');
+    }
+    return this.finish(channelId, 'refund', []);
   }
 }
 

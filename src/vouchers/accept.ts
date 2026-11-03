@@ -20,6 +20,12 @@ export interface AcceptPolicy {
   readonly deposit: bigint;
   /** Session budget agreed in `session_accept.maxSpend`, in stroops. */
   readonly maxSpend: bigint;
+  /**
+   * Channel cumulative already committed before this session began
+   * (`session_accept.baseline`, protocol v2). Vouchers are cumulative per
+   * channel, so the session may spend up to `baseline + maxSpend`. Default 0.
+   */
+  readonly baseline?: bigint;
   /** Channel expiry, unix seconds. */
   readonly expiresAt: number;
   /** Unix seconds. */
@@ -48,7 +54,11 @@ export async function acceptVoucher(
 
   if (policy.now() >= policy.expiresAt) return fail('channel_expired', 'Channel expired');
   if (amount > policy.deposit) return fail('over_deposit', 'Voucher exceeds channel deposit');
-  if (amount > policy.maxSpend) return fail('over_budget', 'Voucher exceeds session budget');
+  const baseline = policy.baseline ?? 0n;
+  if (baseline < 0n) return fail('malformed', 'Negative baseline');
+  if (amount > baseline + policy.maxSpend) {
+    return fail('over_budget', 'Voucher exceeds session budget');
+  }
 
   const retries = policy.maxRetries ?? 8;
   for (let attempt = 0; attempt <= retries; attempt++) {

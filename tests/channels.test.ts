@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   ChannelError,
+  DEFAULT_CLOSE_WAIT,
+  MAX_CLOSE_WAIT,
+  MIN_CLOSE_WAIT,
+  channelBalance,
   IntentError,
   NETWORK_PASSPHRASES,
   NetworkError,
@@ -56,12 +60,89 @@ describe('InMemoryChannelAdapter (test adapter)', () => {
     });
   });
 
-  it('provider shutdown: payer refunds only after expiry, getting the full deposit', async () => {
+  it('provider shutdown: payer close_start, then refund after the window', async () => {
     const { adapter, domain, clock, binding } = await openChannel();
+    await expect(adapter.refund(domain.channelId)).rejects.toMatchObject({ code: 'not_closing' });
+    const cs = await adapter.closeStart(domain.channelId);
+    expect(cs.closeEffectiveAt).toBe(binding.expiresAt); // never before expiry
+    await expect(adapter.closeStart(domain.channelId)).rejects.toMatchObject({
+      code: 'already_closing',
+    });
     await expect(adapter.refund(domain.channelId)).rejects.toMatchObject({ code: 'not_expired' });
     clock.t = binding.expiresAt;
     const r = await adapter.refund(domain.channelId);
     expect(r).toMatchObject({ toProvider: 0n, toPayer: binding.deposit });
+    expect((await adapter.getBinding(domain.channelId))?.status).toBe('refunded');
+  });
+
+  it('top-up raises the deposit so higher vouchers can be settled', async () => {
+    const { adapter, domain } = await openChannel(1_000, 2n * STROOPS);
+    const v5 = createVoucher(payer, domain, 5n * STROOPS);
+    await expect(adapter.settle(domain.channelId, v5)).rejects.toMatchObject({
+      code: 'invalid_voucher',
+    });
+    expect((await adapter.topUp(domain.channelId, 3n * STROOPS)).deposit).toBe(5n * STROOPS);
+    expect((await adapter.settle(domain.channelId, v5)).amount).toBe(5n * STROOPS);
+    await expect(adapter.topUp(domain.channelId, 0n)).rejects.toMatchObject({
+      code: 'invalid_params',
+    });
+  });
+
+  it('settle withdraws deltas, keeps the channel open, and refuses stale vouchers', async () => {
+    const { adapter, domain, binding } = await openChannel();
+    const r1 = await adapter.settle(domain.channelId, createVoucher(payer, domain, STROOPS));
+    expect(r1).toMatchObject({ amount: STROOPS, withdrawn: STROOPS, synthetic: true });
+    const r2 = await adapter.settle(domain.channelId, createVoucher(payer, domain, 4n * STROOPS));
+    expect(r2).toMatchObject({ amount: 3n * STROOPS, withdrawn: 4n * STROOPS });
+    expect(r2.txRef).not.toBe(r1.txRef);
+    await expect(
+      adapter.settle(domain.channelId, createVoucher(payer, domain, 4n * STROOPS)),
+    ).rejects.toMatchObject({ code: 'stale_voucher' });
+    const b = (await adapter.getBinding(domain.channelId))!;
+    expect(b).toMatchObject({ status: 'open', withdrawn: 4n * STROOPS });
+    expect(channelBalance(b)).toBe(binding.deposit - 4n * STROOPS);
+    // close without a new voucher closes at the withdrawn amount
+    const c = await adapter.close(domain.channelId, undefined);
+    expect(c).toMatchObject({ toProvider: 4n * STROOPS, toPayer: 6n * STROOPS });
+  });
+
+  it('provider disputes a payer close with a higher voucher inside the window', async () => {
+    const { adapter, domain, clock, binding } = await openChannel();
+    clock.t = binding.expiresAt - 10;
+    const { closeEffectiveAt } = await adapter.closeStart(domain.channelId);
+    expect(closeEffectiveAt).toBe(binding.expiresAt - 10 + binding.closeWait);
+    await expect(adapter.topUp(domain.channelId, STROOPS)).rejects.toMatchObject({
+      code: 'not_open',
+    });
+    await adapter.settle(domain.channelId, createVoucher(payer, domain, 3n * STROOPS));
+    clock.t = closeEffectiveAt;
+    const r = await adapter.refund(domain.channelId);
+    expect(r).toMatchObject({ toProvider: 3n * STROOPS, toPayer: 7n * STROOPS });
+    expect(r.toProvider + r.toPayer).toBe(binding.deposit);
+    await expect(
+      adapter.settle(domain.channelId, createVoucher(payer, domain, 5n * STROOPS)),
+    ).rejects.toMatchObject({ code: 'already_settled' });
+  });
+
+  it('open validates the dispute window and distinct parties', async () => {
+    const { adapter, binding } = await openChannel();
+    const base = {
+      networkPassphrase: TESTNET,
+      payer: binding.payer,
+      provider: binding.provider,
+      asset: 'T',
+      deposit: 1n,
+      expiresAt: 99_999,
+    };
+    for (const closeWait of [MIN_CLOSE_WAIT - 1, MAX_CLOSE_WAIT + 1]) {
+      await expect(
+        adapter.open({ ...base, closeWait, idempotencyKey: `w${closeWait}` }),
+      ).rejects.toMatchObject({ code: 'invalid_params' });
+    }
+    await expect(
+      adapter.open({ ...base, provider: binding.payer, idempotencyKey: 'same' }),
+    ).rejects.toMatchObject({ code: 'invalid_params' });
+    expect(binding.closeWait).toBe(DEFAULT_CLOSE_WAIT);
   });
 
   it('close rejects forged, over-deposit and unknown-channel vouchers', async () => {
@@ -131,6 +212,26 @@ describe('settlement intents', () => {
     expect(() =>
       transition(intent, 'CONFIRMED', { evidence: { network: TESTNET, txHash: 'abc', ledger: 9 } }),
     ).toThrow(/Illegal/);
+  });
+
+  it('settle intents have their own id and need a voucher above the withdrawn amount', async () => {
+    const { adapter, domain, binding } = await openChannel();
+    const v = createVoucher(payer, domain, 2n * STROOPS);
+    const close = prepareSettlement(binding, { cumulative: 2n * STROOPS, voucher: v });
+    const settle = prepareSettlement(binding, { cumulative: 2n * STROOPS, voucher: v }, 'settle');
+    expect(close.kind).toBe('close');
+    expect(settle.kind).toBe('settle');
+    expect(settle.id).not.toBe(close.id);
+    await adapter.settle(domain.channelId, v);
+    const after = (await adapter.getBinding(domain.channelId))!;
+    expect(() =>
+      prepareSettlement(after, { cumulative: 2n * STROOPS, voucher: v }, 'settle'),
+    ).toThrow(/Nothing to settle/);
+    expect(() => prepareSettlement(after, { cumulative: STROOPS, voucher: v })).toThrow(
+      /below the amount already withdrawn/,
+    );
+    // closing at the withdrawn amount is allowed (refunds the rest)
+    expect(prepareSettlement(after, { cumulative: 2n * STROOPS, voucher: v }).kind).toBe('close');
   });
 
   it('refuses to prepare for a settled channel or an over-deposit voucher', async () => {

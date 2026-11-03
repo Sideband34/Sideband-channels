@@ -79,6 +79,28 @@ describe('acceptVoucher', () => {
     expect(await s.store.get(s.domain.channelId)).toBeUndefined();
   });
 
+  it('budgets a later session from its baseline (vouchers are cumulative per channel)', async () => {
+    const s = await setup();
+    // Session 1 spent 4 of the channel.
+    await acceptVoucher(s.domain, s.policy, s.store, s.mk(4n));
+    // Session 2 starts at baseline 4 with its own 5-unit budget: up to 9.
+    const p2 = { ...s.policy, baseline: 4n * STROOPS };
+    expect(await acceptVoucher(s.domain, p2, s.store, s.mk(9n))).toMatchObject({
+      ok: true,
+      delta: 5n * STROOPS,
+    });
+    expect(await acceptVoucher(s.domain, p2, s.store, s.mk(10n))).toMatchObject({
+      code: 'over_budget',
+    });
+    // Without the baseline the same voucher would be judged against 5 total.
+    expect(await acceptVoucher(s.domain, s.policy, s.store, s.mk(10n))).toMatchObject({
+      code: 'over_budget',
+    });
+    expect(
+      await acceptVoucher(s.domain, { ...s.policy, baseline: -1n }, s.store, s.mk(10n)),
+    ).toMatchObject({ code: 'malformed' });
+  });
+
   it('rejects vouchers once the channel expired', async () => {
     const s = await setup();
     s.clock.t = s.binding.expiresAt;
