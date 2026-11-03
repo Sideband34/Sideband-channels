@@ -53,10 +53,10 @@ Requires Node 22+; the contract needs a stable Rust toolchain.
 ```bash
 git clone https://github.com/Sideband34/Sideband-channels && cd Sideband-channels
 npm ci
-npm run check                    # prettier, eslint, tsc, 50 vitest tests
+npm run check                    # prettier, eslint, tsc, 64 vitest tests
 npx tsx examples/offline-session.ts
 npm run fixtures                 # regenerate fixtures/voucher-vectors.json
-cd contracts && cargo test       # 9 contract tests
+cd contracts && cargo test       # 23 contract tests (incl. proptest)
 ```
 
 ### Building the WASM contract
@@ -79,10 +79,13 @@ Upload/deploy to Testnet is not automated or tested yet.
 |---|---|
 | Voucher format, verification, CAS acceptance | Implemented, tested |
 | Settlement intent state machine | Implemented, tested |
-| In-memory channel adapter | Implemented (synthetic receipts only) |
+| Settlement kinds `settle` (stay open) / `close` (terminal) | Implemented, tested |
+| Session baseline in `acceptVoucher` (several sessions per channel) | Implemented, tested |
+| In-memory channel adapter (open, top-up, settle, close, close-start, refund) | Implemented (synthetic receipts only) |
 | Soroban adapter + RPC client | Implemented, tested against a fake chain client only |
-| Soroban contract | Implemented, tested in the SDK environment; WASM builds in CI |
-| Testnet deployment / real transaction hashes | **Not done** |
+| Soroban contract: top-up, settle, dispute window, refund, events | Implemented; 23 Rust tests incl. a funds-conservation property test; WASM built and uploaded as a CI artifact |
+| `scripts/deploy-testnet.sh`, `scripts/smoke-testnet.sh` (stellar-cli) | Written and syntax-checked; **never run** |
+| Testnet deployment / real transaction hashes | **Not done** (no Testnet access in the build environment) |
 | Security audit | **None** (upstream one-way-channel is also unaudited) |
 
 The voucher bytes follow the upstream one-way-channel commitment layout but have not been checked

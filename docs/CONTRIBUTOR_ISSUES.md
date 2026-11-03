@@ -10,26 +10,29 @@ boundary per issue. Cross-repo work is listed at the end and needs a linked PR i
 
 ## Open work
 
-- [ ] **Testnet deploy script.** Upload the WASM with `stellar-cli`, instantiate a channel, record
-  the contract id and hashes in `deployments/testnet.json`. *Acceptance:* reproducible from a
-  clean checkout with a funded Testnet account; no secrets committed. *Size:* M. Label: `stellar`.
-- [ ] **Live `SorobanChannelAdapter` integration test.** Run open → close → refund against Testnet
-  behind an opt-in env flag. *Acceptance:* receipts carry real ledger numbers; timeouts end in
-  `RECONCILING`, never `FAILED`. *Size:* M. Label: `stellar`.
-- [ ] **Cross-check voucher bytes with the upstream one-way-channel contract.** *Acceptance:* the
-  golden vectors verify on a deployed upstream contract, or an ADR documents the difference.
-  *Size:* M.
+- [ ] **Run the Testnet deploy and smoke scripts.** `scripts/deploy-testnet.sh` and
+  `scripts/smoke-testnet.sh` exist but have never been run. *Acceptance:* a clean run records the
+  wasm hash, contract id and transaction hashes in `deployments/testnet.json`; the smoke script's
+  final assertions pass. No secrets committed. *Size:* M. Label: `stellar`.
+- [ ] **Live `SorobanChannelAdapter` integration test.** Opt-in (env flag) test for open → top_up →
+  settle → close_start → close against Testnet. *Acceptance:* receipts carry real ledger numbers;
+  a forced timeout ends in `RECONCILING`, never `FAILED`. *Size:* M. Label: `stellar`.
+- [ ] **On-chain `prepare_commitment` parity check.** *Acceptance:* the golden vectors'
+  `preimageHex` equals `prepare_commitment` on a deployed instance (ours and upstream
+  one-way-channel), or an ADR documents the difference. *Size:* S.
 - [ ] **Publish the TS SDK as a versioned package** so the gateway no longer needs a sibling
   `file:` checkout. *Acceptance:* gateway CI installs a tagged version. *Size:* S.
-- [ ] **Contract property tests.** Randomised close/refund sequences never pay out more than the
-  deposit. *Size:* S. `good first issue`.
+- [ ] **Contract upgrade / TTL runbook.** Document instance TTL extension and what happens to an
+  archived channel. *Acceptance:* a test that bumps the ledger past the TTL threshold and shows the
+  state is still readable after an `extend_ttl` call. *Size:* S. `good first issue`.
 
 ## Cross-repository
 
 - [ ] **Integration lockfile.** A file in each repo pinning the tested sibling tags/SHAs, checked in
   CI. *Acceptance:* CI fails when a pinned sibling fixture differs. *Size:* M.
-- [ ] **Testnet end-to-end demo.** Fund → offline session → settle on Testnet with recorded
-  transaction hashes, driven from a clean checkout. *Blocked on:* channels Testnet deploy, gateway
-  Soroban wiring. *Size:* L.
-- [ ] **Physical-device compatibility harness.** Two-phone BLE/Wi-Fi run with a published matrix.
-  *Blocked on:* protocol transport adapters. *Size:* L.
+- [ ] **Testnet end-to-end demo.** Fund → offline session (two sessions on one channel) → settle on
+  Testnet with recorded transaction hashes, driven from a clean checkout. *Blocked on:* running
+  `scripts/deploy-testnet.sh` in Sideband-channels, gateway Soroban wiring. *Size:* L.
+- [ ] **Physical-device compatibility harness.** Two-phone BLE run of the mobile `BleTransport`
+  with a published matrix. *Acceptance:* a frame exchange of 10+ vouchers recorded per device
+  pair; no row marked supported without a run. *Size:* L.
