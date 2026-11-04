@@ -8,8 +8,20 @@ import {
   rpc,
   scValToNative,
   xdr,
-  type Keypair,
+  Keypair,
 } from '@stellar/stellar-sdk';
+
+/**
+ * A Keypair created by ANOTHER copy of @stellar/stellar-sdk (e.g. the gateway's own node_modules) carries XDR
+ * classes this copy rejects ("expected string, Uint8Array, or XdrString"). Re-create it from its seed so every
+ * object that reaches a transaction comes from this module's SDK.
+ */
+export function ownKeypair(kp: Keypair): Keypair {
+  if (kp instanceof Keypair) return kp;
+  return Keypair.fromRawEd25519Seed(
+    Buffer.from((kp as { rawSecretKey(): Uint8Array }).rawSecretKey()),
+  );
+}
 import { assertAllowedNetwork } from '../networks.js';
 import { parseAmount } from '../amount.js';
 import type { Voucher } from '../vouchers/voucher.js';
@@ -161,7 +173,7 @@ export class SorobanChannelAdapter implements ChannelAdapter {
   private signer(address: string): Keypair {
     const k = this.c.signers.get(address);
     if (!k) throw new ChannelError('invalid_params', `No signer configured for ${address}`);
-    return k;
+    return ownKeypair(k);
   }
 
   private receipt(r: InvokeResult): TxReceipt {
@@ -338,6 +350,23 @@ export class SorobanChannelAdapter implements ChannelAdapter {
 
 /** Real client over a Soroban RPC server. Unverified against a live network. */
 export class RpcSorobanClient implements SorobanClient {
+  /** Builds the client with THIS package's SDK, so the RPC server and the transactions share one SDK copy. */
+  static forUrl(
+    url: string,
+    networkPassphrase: string,
+    readSource: string,
+    pollMs = 1000,
+    maxPolls = 30,
+  ): RpcSorobanClient {
+    return new RpcSorobanClient(
+      new rpc.Server(url),
+      networkPassphrase,
+      readSource,
+      pollMs,
+      maxPolls,
+    );
+  }
+
   constructor(
     private readonly server: Pick<
       rpc.Server,
@@ -347,19 +376,24 @@ export class RpcSorobanClient implements SorobanClient {
     private readonly readSource: string,
     private readonly pollMs = 1000,
     private readonly maxPolls = 30,
+    private readonly txTimeoutSecs = 300,
   ) {
     assertAllowedNetwork(networkPassphrase);
   }
 
   private async build(source: string, op: xdr.Operation) {
     const acct = await this.server.getAccount(source);
-    return new TransactionBuilder(acct, {
-      fee: BASE_FEE,
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(op)
-      .setTimeout(60)
-      .build();
+    return (
+      new TransactionBuilder(acct, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(op)
+        // Simulation + assembly can take a long time on a slow link; a 60 s bound made live transactions expire
+        // (txTOO_LATE) before they were sent. The hash is known before submission, so a longer bound is safe.
+        .setTimeout(this.txTimeoutSecs)
+        .build()
+    );
   }
 
   async readChannel(contractId: string): Promise<xdr.ScVal | undefined> {
@@ -377,7 +411,8 @@ export class RpcSorobanClient implements SorobanClient {
     return sim.result?.retval;
   }
 
-  private async submit(source: Keypair, op: xdr.Operation): Promise<InvokeResult> {
+  private async submit(foreignSource: Keypair, op: xdr.Operation): Promise<InvokeResult> {
+    const source = ownKeypair(foreignSource);
     const raw = await this.build(source.publicKey(), op);
     const sim = await this.server.simulateTransaction(raw);
     if (rpc.Api.isSimulationError(sim)) throw mapContractError(sim.error);

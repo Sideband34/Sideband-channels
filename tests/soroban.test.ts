@@ -14,6 +14,7 @@ import {
   ChannelError,
   NETWORK_PASSPHRASES,
   RpcSorobanClient,
+  ownKeypair,
   SorobanChannelAdapter,
   SubmissionTimeoutError,
   bindingFromScVal,
@@ -437,6 +438,25 @@ describe('RpcSorobanClient (fake rpc server)', () => {
     });
   });
 
+  it('gives transactions a validity window long enough for a slow link (default 300 s, configurable)', async () => {
+    const maxTimes: number[] = [];
+    const capture = server({
+      simulateTransaction: async (tx: { timeBounds?: { maxTime: string } }) => {
+        maxTimes.push(Number(tx.timeBounds?.maxTime));
+        return simOk();
+      },
+    } as never);
+    const now = Math.floor(Date.now() / 1000);
+    await new RpcSorobanClient(capture, TESTNET, payerKp.publicKey(), 1, 1)
+      .invoke(args)
+      .catch(() => undefined);
+    await new RpcSorobanClient(capture, TESTNET, payerKp.publicKey(), 1, 1, 900)
+      .invoke(args)
+      .catch(() => undefined);
+    expect(maxTimes[0]! - now).toBeGreaterThanOrEqual(295);
+    expect(maxTimes[1]! - now).toBeGreaterThanOrEqual(895);
+  });
+
   it('returns SUCCESS only when the network reports it, with a pre-computed hash', async () => {
     const c = new RpcSorobanClient(
       server({ getTransaction: async () => ({ status: 'SUCCESS', ledger: 42 }) }),
@@ -532,5 +552,31 @@ describe('RpcSorobanClient (fake rpc server)', () => {
     expect(
       () => new RpcSorobanClient(server(), NETWORK_PASSPHRASES.public, payerKp.publicKey()),
     ).toThrow();
+  });
+});
+
+describe('keypairs from another copy of the SDK', () => {
+  it('are re-created from their seed so the transaction only holds XDR classes of this SDK copy', () => {
+    const real = Keypair.random();
+    // what a keypair from a second node_modules copy looks like to this module: same methods, different class
+    const foreign = {
+      publicKey: () => real.publicKey(),
+      rawSecretKey: () => real.rawSecretKey(),
+    } as unknown as Keypair;
+    expect(foreign instanceof Keypair).toBe(false);
+    const own = ownKeypair(foreign);
+    expect(own instanceof Keypair).toBe(true);
+    expect(own.publicKey()).toBe(real.publicKey());
+    expect(ownKeypair(real)).toBe(real);
+  });
+
+  it('RpcSorobanClient.forUrl builds the server with the SDK of this package', () => {
+    expect(
+      RpcSorobanClient.forUrl(
+        'https://soroban-testnet.stellar.org',
+        NETWORK_PASSPHRASES.testnet,
+        Keypair.random().publicKey(),
+      ),
+    ).toBeInstanceOf(RpcSorobanClient);
   });
 });

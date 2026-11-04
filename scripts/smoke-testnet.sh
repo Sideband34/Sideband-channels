@@ -33,7 +33,10 @@ expect_fail() {
 }
 
 echo "== prepare_commitment parity (on-chain bytes vs local encoder)"
-as_payer prepare_commitment --amount 3000000
+ONCHAIN="$(as_payer prepare_commitment --amount 3000000 | tr -d '"')"
+LOCAL="$(npx --prefix "$ROOT" tsx "$ROOT/scripts/commitment-hex.ts" "$CHANNEL_ID" "$PAYER_ADDR" "$PROVIDER_ADDR" 3000000)"
+[[ "$ONCHAIN" == "$LOCAL" ]] || { echo "PARITY FAILED: on-chain $ONCHAIN != local $LOCAL" >&2; exit 1; }
+echo "parity ok: the local encoder and the contract produce identical bytes (${#LOCAL} hex chars)"
 
 echo "== top_up 0.2"
 as_payer top_up --amount 2000000
