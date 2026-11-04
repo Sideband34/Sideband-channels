@@ -4,6 +4,11 @@ All notable changes to Sideband-channels. Pre-release; Testnet/synthetic only; u
 
 ## [Unreleased]
 
+### Changed (found by the first live Testnet run, 2026-11-04)
+- `RpcSorobanClient.forUrl` and `ownKeypair`: avoid XDR mismatches between two copies of `@stellar/stellar-sdk`.
+- Transactions get a 300 s validity window (configurable; 60 s expired on a slow link).
+- `smoke-testnet.sh` asserts encoder/contract parity; new `smoke-refund-testnet.sh`; deployment and smoke results are in `docs/DEPLOYMENT.md` and `docs/OWNER_CHECKLIST.md`.
+
 ### Added
 - Contract lifecycle parity with stellar-experimental/one-way-channel ([ADR 0002](docs/adr/0002-channel-lifecycle.md)):
   payer `top_up`, provider `settle` (withdraw without closing), payer `close_start` with a bounded

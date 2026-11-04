@@ -84,9 +84,24 @@ Upload/deploy to Testnet is not automated or tested yet.
 | In-memory channel adapter (open, top-up, settle, close, close-start, refund) | Implemented (synthetic receipts only) |
 | Soroban adapter + RPC client | Implemented, tested against a fake chain client only |
 | Soroban contract: top-up, settle, dispute window, refund, events | Implemented; 23 Rust tests incl. a funds-conservation property test; WASM built and uploaded as a CI artifact |
-| `scripts/deploy-testnet.sh`, `scripts/smoke-testnet.sh` (stellar-cli) | Written and syntax-checked; **never run** |
-| Testnet deployment / real transaction hashes | **Not done** (no Testnet access in the build environment) |
+| `scripts/deploy-testnet.sh`, `scripts/smoke-testnet.sh`, `scripts/smoke-refund-testnet.sh` (stellar-cli) | **Run on Testnet on 2026-11-04**; results in [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) |
+| Testnet deployment / real transaction hashes | **Done (Testnet only)**: see the Deployments section below |
 | Security audit | **None** (upstream one-way-channel is also unaudited) |
+
+
+### Deployments (Stellar Testnet, 2026-11-04)
+
+Public addresses and hashes only. Testnet XLM, synthetic. **Not audited.**
+
+| Item | Value |
+|---|---|
+| Channel wasm hash | `8912942ed2dcf59a71b189c3eb8377264c04f72476d148a5ed84fd62f1ec71cb` |
+| Smoke channel | [`CD67A4SD2ZWA4BPWVCJKSJ3AI4TJCHEJRUJIDUPPOWT4CEQAJOMS5OTS`](https://stellar.expert/explorer/testnet/contract/CD67A4SD2ZWA4BPWVCJKSJ3AI4TJCHEJRUJIDUPPOWT4CEQAJOMS5OTS) (deploy ledger 5557371) |
+| Gateway-settled channel | [`CDDKJTRAJW64GEABEPH6BBPMTZSC7Z3ERALFPGWGRGZ26H2DYMN2RLER`](https://stellar.expert/explorer/testnet/contract/CDDKJTRAJW64GEABEPH6BBPMTZSC7Z3ERALFPGWGRGZ26H2DYMN2RLER) |
+| Payer / provider | `GC7ZWRDXDPR6OFB6R72463R6PQQJHOEII5EVEEKOSK5ZQDQRYJSHPHRX` / `GBGVFJ3SDXJMUHW7WDZQSV6GXNU6MVY2BMTK2G6QREAZYW7OI64J75MP` |
+
+Every transaction hash and the smoke results are in [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md). Channels are cheap to create;
+these are demo instances, not a service anyone should deposit into.
 
 The voucher bytes follow the upstream one-way-channel commitment layout but have not been checked
 against a live upstream contract on Testnet; see
