@@ -5,8 +5,8 @@
 #   top_up -> settle (voucher 0.3) -> settle replay refused -> close_start
 #   -> provider dispute: close with a higher voucher (0.5) -> refund refused
 #
-# and asserts the final on-chain amounts. NOT RUN IN CI; nothing in this repo
-# claims it has been run. Testnet XLM only. EXPERIMENTAL, NOT AUDITED.
+# and asserts the final on-chain amounts. Not run in CI. Run on Stellar Testnet on 2026-11-04 (results in
+# docs/DEPLOYMENT.md). Testnet XLM only. EXPERIMENTAL, NOT AUDITED.
 #
 # Usage: scripts/smoke-testnet.sh [.testnet-channel.env]
 set -euo pipefail

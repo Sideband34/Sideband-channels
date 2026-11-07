@@ -12,8 +12,10 @@ Part of [Sideband](#how-sideband-works): nearby services, metered value, Stellar
 [![License: MIT](https://img.shields.io/badge/license-MIT-FF8B24.svg)](./LICENSE)
 [![Status: pre-release](https://img.shields.io/badge/status-pre--release-130B12.svg)](#status)
 [![Network: Stellar Testnet only](https://img.shields.io/badge/network-Stellar%20Testnet%20only-130B12.svg)](./SECURITY.md)
+[![Docs](https://img.shields.io/badge/docs-GitBook%20source-FF8B24.svg)](https://github.com/Sideband34/Sideband-gateway/blob/main/gitbook/README.md)
+[![Stellar Wave](https://img.shields.io/badge/Drips-Stellar%20Wave-130B12.svg)](https://github.com/Sideband34/Sideband-channels/issues?q=is%3Aissue+is%3Aopen+label%3A%22Stellar+Wave%22)
 
-[How it works](#how-sideband-works) · [Quickstart](#quickstart) · [Status](#status) · [Architecture](#architecture) · [Contributing](#contributing) · [Security](#security)
+[Docs](https://github.com/Sideband34/Sideband-gateway/blob/main/gitbook/README.md) · [Live site](https://sideband-web1.vercel.app) · [Quick start](#quick-start) · [Status](#status) · [Architecture](#how-it-fits-together) · [Contributing](#contributing) · [Security](#security)
 
 </div>
 
@@ -21,10 +23,11 @@ Part of [Sideband](#how-sideband-works): nearby services, metered value, Stellar
 > Pre-release software for **Stellar Testnet and synthetic assets only**. The channel contract and
 > voucher format are **unaudited**. Do not use with real funds.
 
-## What this repository is
+## What this is
 
-The payment layer of Sideband: a Soroban one-way payment channel contract and a TypeScript SDK
-that every other component uses to create, verify and settle vouchers.
+Sideband-channels is the payment layer. A payer locks funds in a Soroban payment channel contract on Stellar. After that, each metered unit is paid with a small signed promise (a cumulative voucher) that the provider can check without any network. This repository holds the channel contract, the TypeScript SDK that creates and verifies vouchers, and the settlement logic that turns the provider's highest voucher into an on-chain withdrawal.
+
+What is inside:
 
 - **Vouchers** (`src/vouchers`): domain-separated cumulative commitments (ed25519 via
   `@stellar/stellar-sdk`) bound to network, channel, payer and provider, using the upstream
@@ -46,7 +49,7 @@ that every other component uses to create, verify and settle vouchers.
   funds-conservation property test.
 - **Network policy:** the public network is refused; unknown passphrases fail closed.
 
-## Quickstart
+## Quick start
 
 Requires Node 22+; the contract needs a stable Rust toolchain.
 
@@ -136,7 +139,7 @@ the session:
 A voucher is a commitment against already-locked funds, **not** a completed payment. Nothing is
 shown as settled until Stellar confirms it.
 
-## Architecture
+## How it fits together
 
 Four repositories, one responsibility each. No payment signing lives in transport code, and no
 chain logic lives in the app. This repository is highlighted.
@@ -173,30 +176,57 @@ Cross-repo contracts are pinned with fixtures: voucher golden vectors from `Side
 and a synthetic session transcript from `Sideband-gateway`. See
 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for data and ownership paths.
 
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| Contract | Rust 2021, `soroban-sdk` 29.0.1, target `wasm32v1-none`, built with `stellar contract build` |
+| SDK | TypeScript 5.9, Node 22 or newer, `@stellar/stellar-sdk` 17 |
+| Tests | Vitest 5 (64 tests), Rust unit and property tests (23), golden voucher vectors |
+| Tooling | ESLint, Prettier, shellcheck on the scripts, stellar-cli 25.2 or newer for deploy and smoke scripts |
+
+## Project structure
+
+```
+contracts/channel/   Soroban channel contract (Rust) and its tests
+src/vouchers/        voucher format, signing, verification, compare-and-swap store
+src/channels/        ChannelAdapter, in-memory and Soroban adapters
+src/settlement/      settlement intents and reconciliation
+fixtures/            golden voucher vectors shared with the Dart port
+scripts/             deploy, smoke and refund scripts (stellar-cli)
+docs/                architecture, threat model, deployment evidence, ADRs
+```
+
 ## Contributing
 
-Contributions are welcome. Start with [CONTRIBUTING.md](./CONTRIBUTING.md) for the local checks and
-workflow, and pick from the scoped work in
-[docs/CONTRIBUTOR_ISSUES.md](./docs/CONTRIBUTOR_ISSUES.md): each item lists its interfaces,
-acceptance tests and size. Please follow the [Code of Conduct](./CODE_OF_CONDUCT.md).
+Contributions are welcome. Start with [CONTRIBUTING.md](./CONTRIBUTING.md) for the local checks and the workflow, then pick an open issue labelled
+[`Stellar Wave`](https://github.com/Sideband34/Sideband-channels/issues?q=is%3Aissue+is%3Aopen+label%3A%22Stellar+Wave%22). Each issue lists context, scope, implementation notes and
+acceptance criteria, and carries a `trivial`, `medium` or `high` complexity label. New here? Try [`good first issue`](https://github.com/Sideband34/Sideband-channels/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
+Please follow the [Code of Conduct](./CODE_OF_CONDUCT.md).
 
-**Drips Wave.** Sideband intends to participate in
-[Drips Wave](https://docs.drips.network/wave/maintainers/participating-in-a-wave/) on Stellar.
-Participation and rewards depend on organizer approval and are not guaranteed. Wave issues are
-real, scoped work in this repository's boundary, never filler.
+**Drips Wave.** Sideband applies to [Drips Wave](https://docs.drips.network/wave) on Stellar. Acceptance and rewards depend on the organizers and are not guaranteed.
 
 ## Security
 
-Please report vulnerabilities privately; see [SECURITY.md](./SECURITY.md). The threat model is
-in [docs/SECURITY.md](./docs/SECURITY.md). Never post keys or seeds in issues, even Testnet ones.
+Report vulnerabilities privately, as described in [SECURITY.md](./SECURITY.md). The threat model and what is not covered are in [docs/SECURITY.md](./docs/SECURITY.md).
+This is a Testnet prototype and has not been audited. Never post keys or seeds in an issue, even Testnet ones.
 
-## Project documents
+## Community
 
-[PRD](./docs/PRD.md) · [Requirements](./docs/SRD.md) · [Architecture](./docs/ARCHITECTURE.md) ·
-[Stellar protocol](./docs/STELLAR_PROTOCOL.md) · [Roadmap](./docs/ROADMAP.md) ·
-[Brand](./docs/BRAND.md) · [Agent rules](./AGENTS.md)
+Questions and ideas: [GitHub Discussions](https://github.com/Sideband34/Sideband-channels/discussions).
+<!-- Owner: add the community invite link (Telegram or Discord) on this line when it exists. -->
 
-The approved logo is in [`brand/`](./brand) and shared by all four repositories.
+## Maintainers
+
+| Maintainer | Role | Contact |
+|---|---|---|
+| [Cjay-Cyber-2](https://github.com/Cjay-Cyber-2) | Maintainer | GitHub [issues](https://github.com/Sideband34/Sideband-channels/issues) and [Discussions](https://github.com/Sideband34/Sideband-channels/discussions) |
+
+## Contributors
+
+<a href="https://github.com/Sideband34/Sideband-channels/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=Sideband34/Sideband-channels" alt="Contributors" />
+</a>
 
 ## License
 

@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # Deploys one Sideband reference channel to Stellar TESTNET with stellar-cli.
 #
-# NOT RUN IN THIS REPO'S CI and never run by the authors against a live
-# network yet: no transaction hashes or contract ids are published anywhere.
+# Not run in CI. Run on Stellar Testnet on 2026-11-04; results and transaction hashes are in docs/DEPLOYMENT.md.
 # The contract is EXPERIMENTAL and NOT AUDITED. Testnet XLM only.
 #
-# Requirements: stellar-cli >= 23 (`cargo install --locked stellar-cli`),
+# Requirements: stellar-cli >= 25.2 (`cargo install --locked stellar-cli`),
 # the wasm32v1-none Rust target, node >= 22 (for the payer key helper).
 #
 # Usage:

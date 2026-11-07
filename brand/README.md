@@ -1,23 +1,18 @@
-# Sideband — approved flat visual identity
+# Sideband brand assets
 
-The logo in `icon.svg` and `mark.svg` has been **approved as a design direction**. Use the same identity across all four sibling repositories, mobile/web applications, documentation, release assets, and organization profile.
+One visual identity is shared by all four Sideband repositories, the landing site and the app.
 
-![Sideband official logo](./icon.svg)
+![Sideband logo](./icon.svg)
 
-## Source assets
-- `mark.svg` — editable, transparent-background, real SVG paths (no embedded raster).
-- `icon.svg` — approved 512×512 dark-background icon, with flat vector paths.
-- `icon-mono.svg` — single-color, transparent vector mark for adaptable use.
-- `org-avatar.svg` — SVG source for organization's avatar.
-- `org-avatar.png` — 512×512 PNG avatar for GitHub organization settings.
-- `icon-192.png`, `icon-512.png` — PNG raster exports from SVG.
-- `tokens.json` — corresponding color palette and flexible UI brand tokens.
+| File | Use |
+|---|---|
+| `icon.svg` | 512 by 512 icon on a dark background |
+| `mark.svg` | Editable mark with a transparent background (vector paths only) |
+| `icon-mono.svg` | Single-color transparent mark |
+| `org-avatar.svg`, `org-avatar.png` | GitHub organization avatar (512 by 512) |
+| `icon-192.png`, `icon-512.png` | PNG exports for web and app icons |
+| `motif.svg`, `app-background.svg` | Decorative pattern and background used by the site and app |
+| `tokens.json` | Color palette and UI tokens |
 
-### Meaning
-Interlocking exchange paths, separated but connected by a local signal, convey proximity and pay-per-use service exchange.
-
-### Restrictions
-No gradients, 3D, bevel, shadows, extraneous text, or arbitrary redesign of the approved mark. UI/UX remains adaptable for the coding agent and may evolve. The mark is not trademark-cleared; complete an originality/brand review before commercial use.
-
-### GitHub organization avatar
-Organization owner should go to **Organization Settings → Profile → Update avatar** and upload `org-avatar.png`. The GitHub connector in Chat mode cannot edit organization profile images.
+The mark shows two interlocking exchange paths joined by a local signal: proximity and pay-per-use exchange. Keep it flat: no gradients, shadows, bevels or
+added text. The mark has not been trademark-cleared, so do a brand review before any commercial use.

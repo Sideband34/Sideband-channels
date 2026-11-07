@@ -1,37 +1,43 @@
-# Sideband — Environment, Deployment and Recovery
+# Deploying the Sideband channel contract
 
-## Environment boundaries
-- Local: deterministic Docker Compose services, Stellar local network/Testnet, synthetic users/fixtures.
-- Staging: separate database, bucket, API credentials, signing identities, Testnet assets/contracts, observability.
-- Production: requires security audit, real issuer/provider agreements and relevant jurisdictional legal/compliance review. Not included in preimplementation scaffold.
+The channel contract and its TypeScript SDK are in this repository. Everything below is **Stellar Testnet only**. The contract is experimental and **not audited**.
 
-## Suggested variables (non-secret examples only)
-```dotenv
-APP_ENV=development
-STELLAR_NETWORK=testnet
-STELLAR_RPC_URL=https://soroban-testnet.stellar.org
-HORIZON_URL=https://horizon-testnet.stellar.org
-DATABASE_URL=postgresql://localhost:5432/sideband
-REDIS_URL=redis://localhost:6379
-API_BASE_URL=http://localhost:3001
-CHAIN_START_LEDGER=0
-LOG_LEVEL=info
+## Requirements
+
+- stellar-cli 25.2 or newer (the runs below used 27.1.0)
+- Rust stable with `rustup target add wasm32v1-none`
+- Node 22 or newer, `jq` and `curl` (the scripts use them)
+
+## Scripts
+
+| Script | What it does |
+|---|---|
+| `scripts/deploy-testnet.sh` | Creates and funds the payer and provider identities through friendbot, deploys the wasm, opens one channel and writes its public ids to `.testnet-channel.env` |
+| `scripts/smoke-testnet.sh` | Runs the lifecycle on a channel: `top_up`, `settle`, replayed settle refused, `close_start`, provider disputes with a higher voucher, refund refused, with on-chain assertions |
+| `scripts/smoke-refund-testnet.sh` | The payer's `refund` after the dispute window on a fresh channel |
+| `scripts/sign-voucher.ts` | Signs a voucher with a key from the local stellar-cli keystore (read in memory, never printed) |
+
+Environment for `deploy-testnet.sh` (all optional): `NETWORK` (testnet), `PAYER` (`sideband-payer`), `PROVIDER` (`sideband-provider`), `DEPOSIT` (`10000000` stroops, 1 XLM),
+`TTL_SECONDS` (`86400`), `CLOSE_WAIT` (dispute window in seconds, 60 to 2678400, default `600`), `OUT` (`.testnet-channel.env`). The generated `.testnet-channel*.env` files hold public ids
+only and are gitignored. Keys stay in the local stellar-cli keystore and are referenced by alias.
+
+Run stellar-cli from a directory without a `.env` file: stellar-cli loads one from its working directory, and a `SOROBAN_RPC_URL` there makes it demand `--network-passphrase`.
+
+## Building the wasm
+
+```bash
+cd contracts
+stellar contract build
 ```
-- Credentials to sign on-chain go into a secure secret manager or hardware-backed user wallet, never into a public mobile/web bundle.
-- Signed store badge links are configured after actual publication; no fabricated App Store or Google Play app URLs.
 
-## CI & GitHub setup
-- GitHub Actions per repo: formatting/lint, schema checks, unit tests, dependency scanning; chain/devices smoke tests where supported.
-- Branch protection and PR review recommended.
-- Release tag points to tested sibling versions in an integration lockfile.
-- All paths use offline/synthetic test fixtures, not real user financial records.
+CI builds the release wasm with plain cargo (`SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1`) and uploads it with its sha256. The hashes differ by build method, so no reproducible-build
+claim is made. Compare a deployed wasm hash with a build you made yourself from the same commit and toolchain.
 
-## Failure recovery
-- Rebuild indexers from ledger cursor; compare DB projection vs chain truth.
-- Restore DB backups after verifying transaction-intent reconciliation.
-- Never republish user transactions solely because a client request timed out.
-- Test signing-key rotation, dependency outages, stale quotes, malicious user input, insufficient balances and duplicate delivery.
-- External reference infrastructure may change; check upstream project versions and licenses at build time.
+## Recovery
+
+- A settlement whose outcome is unknown goes to `RECONCILING` and is resolved from ledger evidence, never by blind resubmission.
+- A payer who loses the provider starts `close_start` and refunds after the dispute window and the channel expiry.
+- Rotate keys by deploying a new channel; a channel is bound to one payer and one provider for its life.
 
 ## Testnet run log (2026-11-04)
 

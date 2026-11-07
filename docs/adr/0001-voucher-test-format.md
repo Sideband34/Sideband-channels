@@ -3,7 +3,7 @@
 Status: accepted, revised in M2 (supersedes the initial `sideband-test-format-v1`).
 
 ## Context
-`docs/TECHNICAL_BUILD.md` names `stellar-mpp-sdk` and
+The original design named `stellar-mpp-sdk` and
 `stellar-experimental/one-way-channel` as reference implementations. The first
 M1 cut invented its own byte layout and labeled it a test format because the
 upstream sources had not been inspected.

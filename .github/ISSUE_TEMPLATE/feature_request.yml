@@ -7,13 +7,13 @@ body:
     attributes:
       value: |
         Sideband keeps one responsibility per repository. If your idea belongs to a sibling
-        (protocol, channels, gateway or mobile), please open it there. See
-        docs/CONTRIBUTOR_ISSUES.md for work that is already scoped.
+        (protocol, channels, gateway or mobile), please open it there. Check the open
+        issues labelled `Stellar Wave` first: scoped work is already listed there.
   - type: textarea
     id: problem
     attributes:
       label: Problem / motivation
-      description: Who needs this and why? Link the PRD or roadmap item if there is one.
+      description: Who needs this and why? Link the related issue if there is one.
     validations:
       required: true
   - type: textarea

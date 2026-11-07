@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { isTerminal, type ChannelBinding } from '../channels/types.js';
 import type { StoredVoucher } from '../vouchers/store.js';
 
-/** States from docs/TECHNICAL_BUILD.md. CONFIRMED requires finality evidence. */
+/** Settlement states. CONFIRMED requires finality evidence from the right network. */
 export type IntentState =
   'CREATED' | 'AUTHORIZED' | 'SUBMITTED' | 'CONFIRMED' | 'FAILED' | 'RECONCILING';
 

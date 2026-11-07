@@ -3,6 +3,9 @@ contact_links:
   - name: Report a security vulnerability
     url: https://github.com/Sideband34/Sideband-channels/security/advisories/new
     about: Please report security issues privately. See SECURITY.md.
-  - name: Scoped contributor work
-    url: https://github.com/Sideband34/Sideband-channels/blob/main/docs/CONTRIBUTOR_ISSUES.md
-    about: Work items already scoped with acceptance tests.
+  - name: Open Wave issues (scoped, with acceptance criteria)
+    url: https://github.com/Sideband34/Sideband-channels/issues?q=is%3Aissue+is%3Aopen+label%3A%22Stellar+Wave%22
+    about: Pick a ready issue. Each lists context, scope and acceptance criteria.
+  - name: Questions and ideas
+    url: https://github.com/Sideband34/Sideband-channels/discussions
+    about: Ask in Discussions before opening a feature request.
