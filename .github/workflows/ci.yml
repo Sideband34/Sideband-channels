@@ -6,8 +6,8 @@ jobs:
   ts:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version: 22 }
       - run: npm ci
       - run: npm run check
@@ -16,7 +16,7 @@ jobs:
   contract:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo fmt --check
         working-directory: contracts
@@ -35,7 +35,7 @@ jobs:
         run: |
           test -s target/wasm32v1-none/release/sideband_channel.wasm
           sha256sum target/wasm32v1-none/release/sideband_channel.wasm | tee sideband_channel.wasm.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sideband-channel-wasm
           path: |
@@ -45,7 +45,7 @@ jobs:
   scripts:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Syntax-check testnet scripts (not executed in CI)
         run: |
           bash -n scripts/deploy-testnet.sh
