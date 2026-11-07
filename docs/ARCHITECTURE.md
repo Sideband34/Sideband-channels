@@ -1,48 +1,70 @@
-# Sideband — Cross-repository Architecture
+# Sideband architecture
 
-## Why exactly four repositories?
-These are four distinct deployable/reusable engineering domains. They must remain independently testable and publishable. Splitting arbitrary features into extra repos solely for Wave incentives is prohibited.
+Sideband lets a phone pay a nearby device for a small metered service over Bluetooth LE or local Wi-Fi, with no internet during the session. The
+payer funds a Stellar (Soroban) payment channel while online, signs cumulative vouchers locally while offline, and the provider settles on-chain
+later. A voucher is a commitment against funds that are already locked. It is not a completed payment.
 
-| Repository | Independent ownership | Outputs | Consumers |
+## Four repositories, one responsibility each
+
+| Repository | Owns | Output | Consumers |
 |---|---|---|---|
-| `sideband-mobile` | Nearby service discovery UX, local sessions, payer/provider modes, secure signing, spending limits, usage history and receipts | Flutter mobile | product users or other repo services |
-| `sideband-protocol` | BLE/local-Wi-Fi discovery, pairing, authenticated session frames, transport retries, metering message schema, backpressure and session IDs | Dart package + native transport adapters | other project repos via versioned API/SDK |
-| `sideband-gateway` | Local service hosting, provider authentication, usage meter, anti-replay voucher validation, metered-demo service, settlement preparation, product marketing web | TypeScript gateway + small landing site | product users or other repo services |
-| `sideband-channels` | Stellar channel deployment/adapters, prefunding, domain-separated cumulative commitments, close/refund, on-chain settlement and contract tests | Rust contract integration + TS SDK | other project repos via versioned API/SDK |
+| [Sideband-protocol](https://github.com/Sideband34/Sideband-protocol) | Versioned session frames, canonical encoding, the session state machine, metering, the transport contract | Dart package | Sideband-mobile; frame names and limits are mirrored in Sideband-gateway |
+| [Sideband-channels](https://github.com/Sideband34/Sideband-channels) | The Soroban channel contract, the cumulative voucher format, channel adapters, settlement intents | Rust contract and TypeScript SDK | Sideband-gateway; Sideband-mobile has a Dart port checked against golden vectors |
+| [Sideband-gateway](https://github.com/Sideband34/Sideband-gateway) | The provider runtime: signed service manifest, metered demo service, HTTP 402 flow, anti-replay voucher validation, settlement preparation, the landing site | TypeScript service and Next.js site | Payers over HTTP or the local transport |
+| [Sideband-mobile](https://github.com/Sideband34/Sideband-mobile) | The payer app: discovery, spend limits, key storage, voucher signing, session journal, receipts | Flutter app (Android APK) | People |
 
-## Request and ownership paths
+Each repository builds, tests and releases on its own. No payment signing lives in transport code, and no chain logic lives in the app.
+
+## Request and payment path
+
 ```
-Sideband Flutter <--> sideband-protocol <--> sideband-gateway (provider)
-       |                                         |
-       +---- signed cumulative vouchers --------+
-       |                                         |
-       +---- sideband-channels SDK --------------+----> Stellar channel settlement
+Sideband-mobile <--> Sideband-protocol frames <--> Sideband-gateway (provider)
+      |                                                   |
+      +--------- signed cumulative vouchers --------------+
+      |                                                   |
+      +--- voucher format (Dart port, golden vectors) ----+--> Sideband-channels --> Stellar channel contract
 ```
-The protocol is transport/metering metadata and is usable without importing UI or gateway implementations. Gateway is the paid service/provider runtime and includes the standalone marketing website (not a fifth repo). Channels owns the payment-specific cryptography/settlement adapters; no payment signing inside BLE transport code.
 
-## Stellar integration: essential system, not decoration
-- An online setup transaction deposits a supported Stellar asset into a Soroban one-way payment channel bound to a provider and payer commitment key.
-- During disconnected usage the payer signs domain-separated, monotonically increasing cumulative commitments locally.
-- Provider verifies signatures, current cached channel binding, price cap and anti-replay state without making a payment transaction each time.
-- After reconnect the provider closes/settles the channel and the remainder becomes refundable under the verified contract rules.
-- Use stellar-mpp-sdk / stellar-experimental one-way-channel as reviewed dependencies or reference implementations; never assume experimental code is audited.
+1. **Fund (online).** The payer deposits a Testnet asset into a Soroban channel bound to one provider.
+2. **Discover and agree (local).** The provider advertises a signed service manifest. The payer checks the provider identity, the price and the spending cap,
+   and binds the funded channel.
+3. **Stream vouchers (offline).** Each metered unit raises a cumulative, domain-separated voucher signed on the phone. The provider verifies the signature, the
+   channel, the network and the monotonic amount with an atomic compare-and-swap, and rejects replay and rollback.
+4. **Settle (online).** The provider withdraws up to its highest voucher. `settle` keeps the channel open. `close` ends it and refunds the rest. A payer can start a
+   close at any time, and the provider then has a dispute window to submit its highest voucher before the payer reclaims the remainder.
 
-## Service and package contracts
-- OpenAPI for network APIs; generated Dart/TypeScript clients; schema snapshots checked into CI.
-- Published package semver for reusable SDK/contract bindings; explicit peer version compatibility table.
-- Idempotency tokens across all state-changing network/ledger operations.
-- Reconciliation event contract: `{id, sourceRepo, schemaVersion, network, ledgerCursor, entityRef, status, observedAt}`.
-- Never assume a wallet knows off-chain business rights or that an API database can overrule confirmed on-chain state.
+If there is no funded channel and no internet, the app refuses to start a paid session. Nothing is shown as settled until Stellar confirms it.
 
-## Integration test order
-1. Each repository passes independent lint/build/unit tests.
-2. Publish local SDKs and generated interfaces.
-3. Run network local/sandbox or Testnet tests.
-4. Run API/service orchestration tests with fake wallets and then test wallets.
-5. Run frontend/device E2E.
-6. Verify failure and recovery (network loss, duplicate event, stale authorization, partial settlement).
+## Contracts between the repositories
 
-## Long-term release strategy
-- Independent tags/releases in each repo.
-- Project-wide integration lockfile references tested SHAs/tags of dependencies.
-- Before shipping any release, each repo README links the matching version of its three siblings.
+- Voucher bytes: `fixtures/voucher-vectors.json` in Sideband-channels is the source of truth. The TypeScript SDK and the Dart port both check against it.
+- Session frames: the field names and limits in Sideband-protocol are mirrored in the gateway, with a synthetic session transcript fixture that both sides test.
+- Settlement intents move `CREATED`, `AUTHORIZED`, `SUBMITTED`, `CONFIRMED`, and go to `RECONCILING` after a timeout following submission. `CONFIRMED` needs finality
+  evidence from the right network.
+- The public network is refused everywhere. An unknown network passphrase fails closed.
+
+## Hosted demo topology
+
+```
+browser --> Vercel (landing site, built from Sideband-gateway/apps/landing)
+payer   --> Render (Sideband-gateway, free plan, synthetic test adapter)
+                      |
+                      +--> Stellar Testnet RPC (only with ADAPTER=soroban and a provider key)
+```
+
+The hosted gateway runs the synthetic test adapter: its receipts are labeled synthetic and nothing settles on-chain. The live adapter (`ADAPTER=soroban`) needs a Testnet
+provider secret that only the operator may set, so it is not enabled on the hosted instance. The on-chain evidence for the channel contract is in
+[`docs/DEPLOYMENT.md`](./DEPLOYMENT.md) of Sideband-channels.
+
+## Failure modes the design accounts for
+
+| Failure | What happens |
+|---|---|
+| Replayed or lower voucher | Rejected by the provider's compare-and-swap, never settled |
+| Voucher for another network, channel or provider | Rejected by domain separation and binding checks |
+| Provider goes away | The payer starts a close and reclaims the remainder after the dispute window |
+| Payer goes away | The provider settles its highest voucher whenever it is online |
+| Settlement submission times out | The intent moves to `RECONCILING` and resolves from ledger evidence, never by resubmitting blindly |
+| Spending cap reached | The session closes; no voucher above the cap is accepted |
+
+See [`SECURITY.md`](./SECURITY.md) for the trust boundaries and what is not covered.

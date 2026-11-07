@@ -23,8 +23,8 @@ Please **do not open a public issue** for anything that could put funds, keys or
    **without technical details**, and a maintainer will reply with a private channel.
 
 Include the affected repository and commit, the impact, and steps or a test that reproduces it.
-We aim to acknowledge reports within **5 working days** and to agree on a fix and disclosure
-timeline with you. Credit is given in the advisory unless you prefer otherwise. There is no paid
+This is a volunteer-run project, so we answer on a best-effort basis, usually within a week, and agree a fix and
+disclosure timeline with you. Credit is given in the advisory unless you prefer otherwise. There is no paid
 bug bounty.
 
 ## Scope

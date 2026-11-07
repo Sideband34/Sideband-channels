@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
-import type { ChannelBinding } from '../channels/types.js';
+import { isTerminal, type ChannelBinding } from '../channels/types.js';
 import type { StoredVoucher } from '../vouchers/store.js';
 
-/** States from docs/TECHNICAL_BUILD.md. CONFIRMED requires finality evidence. */
+/** Settlement states. CONFIRMED requires finality evidence from the right network. */
 export type IntentState =
   'CREATED' | 'AUTHORIZED' | 'SUBMITTED' | 'CONFIRMED' | 'FAILED' | 'RECONCILING';
 
@@ -12,8 +12,15 @@ export interface FinalityEvidence {
   readonly ledger: number;
 }
 
+/**
+ * `settle`: withdraw up to the voucher, channel stays open (long-running
+ * providers, repeated sessions). `close`: withdraw and refund the rest; terminal.
+ */
+export type SettlementKind = 'settle' | 'close';
+
 export interface SettlementIntent {
-  readonly id: string; // idempotency key; stable for (channel, amount)
+  readonly id: string; // idempotency key; stable for (network, channel, kind, amount)
+  readonly kind: SettlementKind;
   readonly channelId: string;
   readonly network: string;
   readonly amount: bigint; // what the provider claims
@@ -45,14 +52,24 @@ const ALLOWED: Record<IntentState, IntentState[]> = {
 export function prepareSettlement(
   binding: ChannelBinding,
   highest: StoredVoucher,
+  kind: SettlementKind = 'close',
 ): SettlementIntent {
-  if (binding.status !== 'open') throw new IntentError(`Channel already ${binding.status}`);
+  if (isTerminal(binding.status)) throw new IntentError(`Channel already ${binding.status}`);
   if (highest.cumulative > binding.deposit) throw new IntentError('Voucher exceeds deposit');
+  if (highest.cumulative < binding.withdrawn) {
+    throw new IntentError('Voucher below the amount already withdrawn');
+  }
+  if (kind === 'settle' && highest.cumulative === binding.withdrawn) {
+    throw new IntentError('Nothing to settle: voucher already withdrawn');
+  }
+  // 'close' keeps the historical id (no kind prefix) so existing intents stay stable.
+  const tag = kind === 'close' ? '' : 'settle|';
   const id = createHash('sha256')
-    .update(`${binding.networkPassphrase}|${binding.channelId}|${highest.cumulative}`)
+    .update(`${tag}${binding.networkPassphrase}|${binding.channelId}|${highest.cumulative}`)
     .digest('hex');
   return {
     id,
+    kind,
     channelId: binding.channelId,
     network: binding.networkPassphrase,
     amount: highest.cumulative,

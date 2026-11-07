@@ -14,6 +14,7 @@ import {
   ChannelError,
   NETWORK_PASSPHRASES,
   RpcSorobanClient,
+  ownKeypair,
   SorobanChannelAdapter,
   SubmissionTimeoutError,
   bindingFromScVal,
@@ -33,13 +34,16 @@ const S = 10_000_000n;
 
 /** Builds the ScVal the contract's `get` returns (struct => sorted symbol map). */
 function channelScVal(o: {
-  status: 'Open' | 'Closed' | 'Refunded';
+  status: 'Open' | 'Closing' | 'Closed' | 'Refunded';
   deposit?: bigint;
   paid?: bigint;
   refunded?: bigint;
+  effectiveAt?: bigint;
 }): xdr.ScVal {
   const sym = (s: string) => nativeToScVal(s, { type: 'symbol' });
   const entries: [string, xdr.ScVal][] = [
+    ['close_effective_at', nativeToScVal(o.effectiveAt ?? 0n, { type: 'u64' })],
+    ['close_wait', nativeToScVal(600n, { type: 'u64' })],
     ['deposit', nativeToScVal(o.deposit ?? 10n * S, { type: 'i128' })],
     ['expires_at', nativeToScVal(10_000n, { type: 'u64' })],
     ['paid_to_provider', nativeToScVal(o.paid ?? 0n, { type: 'i128' })],
@@ -78,11 +82,17 @@ class FakeClient implements SorobanClient {
     };
     if (r instanceof Error) throw r;
     if (r.status === 'SUCCESS') {
+      const amt = () => scValToNative(a.args[0]!) as bigint;
       if (a.method === 'init') this.state = channelScVal({ status: 'Open' });
       if (a.method === 'close')
-        this.state = channelScVal({ status: 'Closed', paid: 3n * S, refunded: 7n * S });
+        this.state = channelScVal({ status: 'Closed', paid: amt(), refunded: 10n * S - amt() });
       if (a.method === 'refund')
         this.state = channelScVal({ status: 'Refunded', refunded: 10n * S });
+      if (a.method === 'settle') this.state = channelScVal({ status: 'Open', paid: amt() });
+      if (a.method === 'top_up')
+        this.state = channelScVal({ status: 'Open', deposit: 10n * S + amt() });
+      if (a.method === 'close_start')
+        this.state = channelScVal({ status: 'Closing', effectiveAt: 10_000n });
     }
     return r;
   }
@@ -168,7 +178,8 @@ describe('SorobanChannelAdapter (fake client)', () => {
     expect(c.calls).toHaveLength(1);
     const call = c.calls[0]!;
     expect(call).toMatchObject({ method: 'init', source: payerKp.publicKey() });
-    expect(call.args).toHaveLength(6);
+    expect(call.args).toHaveLength(7);
+    expect(scValToNative(call.args[6]!)).toBe(3600n); // DEFAULT_CLOSE_WAIT
     expect(scValToNative(call.args[4]!)).toBe(10n * S);
     expect(
       Buffer.from(scValToNative(call.args[3]!) as Uint8Array).equals(
@@ -260,16 +271,119 @@ describe('SorobanChannelAdapter (fake client)', () => {
     expect(await a.findTransaction('nope')).toEqual({ status: 'NOT_FOUND' });
   });
 
-  it('refund is signed by the payer; unknown channel is not_found', async () => {
+  it('refund needs close_start and an elapsed window; it is signed by the payer', async () => {
     const c = new FakeClient();
     c.state = channelScVal({ status: 'Open' });
-    const a = adapter(c);
+    await expect(adapter(c).refund(CHANNEL)).rejects.toMatchObject({ code: 'not_closing' });
+    c.state = channelScVal({ status: 'Closing', effectiveAt: 5_000n });
+    await expect(adapter(c).refund(CHANNEL)).rejects.toMatchObject({ code: 'not_expired' });
+    expect(c.calls).toHaveLength(0);
+    const a = adapter(c, { now: () => 5_000 });
     expect(await a.refund(CHANNEL)).toMatchObject({ toPayer: 10n * S, toProvider: 0n });
     expect(c.calls[0]).toMatchObject({ method: 'refund', source: payerKp.publicKey() });
     await expect(adapter(new FakeClient()).refund(CHANNEL)).rejects.toMatchObject({
       code: 'not_found',
     });
     expect(await adapter(new FakeClient()).getBinding(CHANNEL)).toBeUndefined();
+  });
+});
+
+describe('SorobanChannelAdapter lifecycle (fake client)', () => {
+  const domain = {
+    networkPassphrase: TESTNET,
+    channelId: CHANNEL,
+    payer: payerKp.publicKey(),
+    provider: providerKp.publicKey(),
+  };
+  const v = (n: bigint) => createVoucher(keypairSigner(payerKp), domain, n);
+
+  it('maps closing state with its effective time', () => {
+    const b = bindingFromScVal(
+      CHANNEL,
+      TESTNET,
+      channelScVal({ status: 'Closing', paid: S, effectiveAt: 12_345n }),
+    );
+    expect(b).toMatchObject({
+      status: 'closing',
+      withdrawn: S,
+      closeWait: 600,
+      closeEffectiveAt: 12_345,
+    });
+    expect(b.settledToProvider).toBeUndefined();
+  });
+
+  it('topUp is payer-signed, positive only, and returns the new deposit', async () => {
+    const c = new FakeClient();
+    c.state = channelScVal({ status: 'Open' });
+    const a = adapter(c);
+    expect(await a.topUp(CHANNEL, 2n * S)).toMatchObject({ deposit: 12n * S, txRef: 'h-top_up' });
+    expect(c.calls[0]).toMatchObject({ method: 'top_up', source: payerKp.publicKey() });
+    await expect(a.topUp(CHANNEL, 0n)).rejects.toMatchObject({ code: 'invalid_params' });
+    c.state = channelScVal({ status: 'Closing', effectiveAt: 10_000n });
+    await expect(a.topUp(CHANNEL, S)).rejects.toMatchObject({ code: 'not_open' });
+  });
+
+  it('settle is provider-signed, keeps the channel open, refuses stale vouchers locally', async () => {
+    const c = new FakeClient();
+    c.state = channelScVal({ status: 'Open', paid: S });
+    const a = adapter(c);
+    const r = await a.settle(CHANNEL, v(4n * S));
+    expect(r).toMatchObject({ amount: 3n * S, withdrawn: 4n * S, synthetic: false });
+    expect(c.calls[0]).toMatchObject({ method: 'settle', source: providerKp.publicKey() });
+    expect(scValToNative(c.calls[0]!.args[0]!)).toBe(4n * S);
+    expect((await a.getBinding(CHANNEL))?.status).toBe('open');
+    await expect(a.settle(CHANNEL, v(4n * S))).rejects.toMatchObject({ code: 'stale_voucher' });
+    expect(c.calls).toHaveLength(1);
+    expect(mapContractError('Error(Contract, #7)').code).toBe('stale_voucher');
+  });
+
+  it('close without a voucher closes at the withdrawn amount', async () => {
+    const c = new FakeClient();
+    c.state = channelScVal({ status: 'Open', paid: 2n * S });
+    const r = await adapter(c).close(CHANNEL, undefined);
+    expect(scValToNative(c.calls[0]!.args[0]!)).toBe(2n * S);
+    expect(r).toMatchObject({ toProvider: 2n * S, toPayer: 8n * S });
+  });
+
+  it('closeStart is payer-signed and reports the effective time; twice is refused', async () => {
+    const c = new FakeClient();
+    c.state = channelScVal({ status: 'Open' });
+    const a = adapter(c);
+    expect(await a.closeStart(CHANNEL)).toMatchObject({ closeEffectiveAt: 10_000 });
+    expect(c.calls[0]).toMatchObject({ method: 'close_start', source: payerKp.publicKey() });
+    await expect(a.closeStart(CHANNEL)).rejects.toMatchObject({ code: 'already_closing' });
+    expect(mapContractError('Error(Contract, #10)').code).toBe('already_closing');
+    expect(mapContractError('Error(Contract, #8)').code).toBe('not_closing');
+  });
+
+  it('provider can still settle during the dispute window', async () => {
+    const c = new FakeClient();
+    c.state = channelScVal({ status: 'Closing', effectiveAt: 10_000n });
+    const r = await adapter(c).settle(CHANNEL, v(3n * S));
+    expect(r.withdrawn).toBe(3n * S);
+  });
+
+  it('terminal channels refuse every mutation before anything is sent', async () => {
+    const c = new FakeClient();
+    c.state = channelScVal({ status: 'Closed', paid: S, refunded: 9n * S });
+    const a = adapter(c);
+    for (const p of [
+      a.topUp(CHANNEL, S),
+      a.settle(CHANNEL, v(2n * S)),
+      a.close(CHANNEL, v(2n * S)),
+      a.closeStart(CHANNEL),
+      a.refund(CHANNEL),
+    ]) {
+      await expect(p).rejects.toMatchObject({ code: 'already_settled' });
+    }
+    expect(c.calls).toHaveLength(0);
+  });
+
+  it('an applied settle whose effect is not visible yet is a timeout (reconcile)', async () => {
+    const c = new FakeClient();
+    c.state = channelScVal({ status: 'Open' });
+    c.invoke = async () => ({ hash: 'h-hidden', status: 'SUCCESS', ledger: 3 });
+    await expect(adapter(c).settle(CHANNEL, v(S))).rejects.toMatchObject({ txHash: 'h-hidden' });
   });
 });
 
@@ -322,6 +436,25 @@ describe('RpcSorobanClient (fake rpc server)', () => {
     await expect(err('Error(Contract, #3)').readChannel(CHANNEL)).rejects.toMatchObject({
       code: 'invalid_params',
     });
+  });
+
+  it('gives transactions a validity window long enough for a slow link (default 300 s, configurable)', async () => {
+    const maxTimes: number[] = [];
+    const capture = server({
+      simulateTransaction: async (tx: { timeBounds?: { maxTime: string } }) => {
+        maxTimes.push(Number(tx.timeBounds?.maxTime));
+        return simOk();
+      },
+    } as never);
+    const now = Math.floor(Date.now() / 1000);
+    await new RpcSorobanClient(capture, TESTNET, payerKp.publicKey(), 1, 1)
+      .invoke(args)
+      .catch(() => undefined);
+    await new RpcSorobanClient(capture, TESTNET, payerKp.publicKey(), 1, 1, 900)
+      .invoke(args)
+      .catch(() => undefined);
+    expect(maxTimes[0]! - now).toBeGreaterThanOrEqual(295);
+    expect(maxTimes[1]! - now).toBeGreaterThanOrEqual(895);
   });
 
   it('returns SUCCESS only when the network reports it, with a pre-computed hash', async () => {
@@ -419,5 +552,31 @@ describe('RpcSorobanClient (fake rpc server)', () => {
     expect(
       () => new RpcSorobanClient(server(), NETWORK_PASSPHRASES.public, payerKp.publicKey()),
     ).toThrow();
+  });
+});
+
+describe('keypairs from another copy of the SDK', () => {
+  it('are re-created from their seed so the transaction only holds XDR classes of this SDK copy', () => {
+    const real = Keypair.random();
+    // what a keypair from a second node_modules copy looks like to this module: same methods, different class
+    const foreign = {
+      publicKey: () => real.publicKey(),
+      rawSecretKey: () => real.rawSecretKey(),
+    } as unknown as Keypair;
+    expect(foreign instanceof Keypair).toBe(false);
+    const own = ownKeypair(foreign);
+    expect(own instanceof Keypair).toBe(true);
+    expect(own.publicKey()).toBe(real.publicKey());
+    expect(ownKeypair(real)).toBe(real);
+  });
+
+  it('RpcSorobanClient.forUrl builds the server with the SDK of this package', () => {
+    expect(
+      RpcSorobanClient.forUrl(
+        'https://soroban-testnet.stellar.org',
+        NETWORK_PASSPHRASES.testnet,
+        Keypair.random().publicKey(),
+      ),
+    ).toBeInstanceOf(RpcSorobanClient);
   });
 });

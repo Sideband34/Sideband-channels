@@ -30,5 +30,24 @@ jobs:
         working-directory: contracts
         env:
           SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2: '1'
-      - run: test -s target/wasm32v1-none/release/sideband_channel.wasm
+      - name: Check WASM and record its sha256
         working-directory: contracts
+        run: |
+          test -s target/wasm32v1-none/release/sideband_channel.wasm
+          sha256sum target/wasm32v1-none/release/sideband_channel.wasm | tee sideband_channel.wasm.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sideband-channel-wasm
+          path: |
+            contracts/target/wasm32v1-none/release/sideband_channel.wasm
+            contracts/sideband_channel.wasm.sha256
+          if-no-files-found: error
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check testnet scripts (not executed in CI)
+        run: |
+          bash -n scripts/deploy-testnet.sh
+          bash -n scripts/smoke-testnet.sh
+          shellcheck --severity=warning scripts/*.sh

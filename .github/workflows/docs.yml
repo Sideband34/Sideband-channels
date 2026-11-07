@@ -5,14 +5,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate required project documents
+      - name: Required project documents exist
         run: |
-          test -s README.md
-          test -s AGENTS.md
-          test -s docs/PROJECT_MASTER.md
-          test -s docs/ARCHITECTURE.md
-          test -s brand/icon.svg
-          test -s SECURITY.md
-          test -s CODE_OF_CONDUCT.md
-          test -s CONTRIBUTING.md
-          test -s docs/CONTRIBUTOR_ISSUES.md
+          for f in README.md LICENSE SECURITY.md CODE_OF_CONDUCT.md CONTRIBUTING.md CHANGELOG.md \
+                   docs/ARCHITECTURE.md docs/SECURITY.md brand/icon.svg \
+                   .github/pull_request_template.md; do
+            test -s "$f" || { echo "missing or empty: $f"; exit 1; }
+          done
+      - name: Relative markdown links resolve
+        run: |
+          python3 - <<'PY'
+          import pathlib, re, sys
+          skip = {'node_modules', '.git', 'build', '.dart_tool', 'gitbook', 'ios', 'android'}
+          bad = []
+          for md in pathlib.Path('.').rglob('*.md'):
+              if skip & set(md.parts):
+                  continue
+              for m in re.finditer(r'\]\(([^)\s]+)\)', md.read_text(encoding='utf-8')):
+                  target = m.group(1).split('#')[0]
+                  if not target or re.match(r'^[a-z]+:', target) or target.startswith('/'):
+                      continue
+                  if not (md.parent / target).exists():
+                      bad.append(f'{md}: {target}')
+          print('\n'.join(bad) or 'all relative links resolve')
+          sys.exit(1 if bad else 0)
+          PY
