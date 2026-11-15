@@ -1,17 +1,25 @@
-import { StrKey } from '@stellar/stellar-sdk';
+import { Keypair, StrKey } from '@stellar/stellar-sdk';
 import { describe, expect, it } from 'vitest';
 import {
+  InMemoryVoucherStore,
   NETWORK_PASSPHRASES,
   NetworkError,
+  VoucherFormatError,
+  acceptVoucher,
   buildPreimage,
   createVoucher,
   formatAmount,
   keypairSigner,
   networkId,
   parseAmount,
+  signVoucher,
   verifyVoucher,
+  type AsyncVoucherSigner,
+  type LegacyVoucherSigner,
+  type VoucherSigner,
 } from '../src/index.js';
-import { attackerKp, openChannel, payer, STROOPS } from './helpers.js';
+import { createStellarCliSigner } from '../examples/stellar-cli-signer.js';
+import { attackerKp, openChannel, payer, payerKp, STROOPS } from './helpers.js';
 
 describe('amount', () => {
   it('round-trips canonical strings like the Dart Amount', () => {
@@ -175,5 +183,101 @@ describe('voucher create/verify', () => {
     const { domain } = await openChannel();
     expect(() => createVoucher(payer, domain, 0n)).toThrow();
     expect(() => createVoucher(payer, domain, 1n << 127n)).toThrow();
+  });
+
+  it('signs through an async recording VoucherSigner that only sees commitment bytes', async () => {
+    const { domain, binding, clock } = await openChannel();
+    const recordedCalls: Uint8Array[] = [];
+    const remoteKp = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 1));
+
+    const recordingSigner: AsyncVoucherSigner = {
+      publicKey: () => remoteKp.publicKey(),
+      async sign(bytes: Uint8Array): Promise<Uint8Array> {
+        recordedCalls.push(new Uint8Array(bytes));
+        const sig = new Uint8Array(remoteKp.sign(Buffer.from(bytes)));
+        // Mutate the passed buffer in place to prove the SDK isolated its preimage buffer.
+        bytes.fill(0xff);
+        return sig;
+      },
+    };
+
+    expect('secret' in recordingSigner).toBe(false);
+    expect('rawSecretKey' in recordingSigner).toBe(false);
+
+    const vAsync = await createVoucher(recordingSigner, domain, 2n * STROOPS);
+    const vViaSignHelper = await signVoucher(recordingSigner, domain, 3n * STROOPS);
+    const vKeypair = createVoucher(payer, domain, 2n * STROOPS);
+
+    expect(vAsync).toEqual(vKeypair);
+    expect(recordedCalls).toHaveLength(2);
+    expect(Buffer.from(recordedCalls[0]!)).toEqual(
+      Buffer.from(buildPreimage(domain, 2n * STROOPS)),
+    );
+    expect(Buffer.from(recordedCalls[1]!)).toEqual(
+      Buffer.from(buildPreimage(domain, 3n * STROOPS)),
+    );
+    expect(verifyVoucher(domain, vAsync)).toEqual({ ok: true, cumulative: 2n * STROOPS });
+
+    const store = new InMemoryVoucherStore();
+    const policy = {
+      deposit: binding.deposit,
+      maxSpend: 5n * STROOPS,
+      expiresAt: binding.expiresAt,
+      now: () => clock.t,
+    };
+    expect(await acceptVoucher(domain, policy, store, vAsync)).toMatchObject({
+      ok: true,
+      cumulative: 2n * STROOPS,
+    });
+    expect(await acceptVoucher(domain, policy, store, vViaSignHelper)).toMatchObject({
+      ok: true,
+      cumulative: 3n * STROOPS,
+    });
+  });
+
+  it('supports the stellar-cli keystore signer adapter with a recorded driver', async () => {
+    const { domain } = await openChannel();
+    const driverCalls: { op: 'address' | 'sign'; identity: string; bytes?: Uint8Array }[] = [];
+    const signer = await createStellarCliSigner('payer-id', {
+      async address(identity) {
+        driverCalls.push({ op: 'address', identity });
+        return payerKp.publicKey();
+      },
+      async sign(identity, bytes) {
+        driverCalls.push({ op: 'sign', identity, bytes: new Uint8Array(bytes) });
+        return new Uint8Array(payerKp.sign(Buffer.from(bytes)));
+      },
+    });
+
+    const voucher = await signVoucher(signer, domain, STROOPS);
+    expect(verifyVoucher(domain, voucher)).toEqual({ ok: true, cumulative: STROOPS });
+    expect(driverCalls).toHaveLength(2);
+    expect(driverCalls[0]).toEqual({ op: 'address', identity: 'payer-id' });
+    expect(driverCalls[1]?.op).toBe('sign');
+    expect(Buffer.from(driverCalls[1]!.bytes!)).toEqual(
+      Buffer.from(buildPreimage(domain, STROOPS)),
+    );
+  });
+
+  it('rejects malformed signature lengths from custom signers', async () => {
+    const { domain } = await openChannel();
+    const badSigner: VoucherSigner = {
+      publicKey: () => payerKp.publicKey(),
+      sign: () => new Uint8Array(32),
+    };
+    expect(() => createVoucher(badSigner, domain, STROOPS)).toThrow(VoucherFormatError);
+  });
+
+  it('keeps deprecated Keypair and property-based signer overloads working for one release', async () => {
+    const { domain } = await openChannel();
+    const fromKeypair = createVoucher(payerKp, domain, STROOPS);
+    const legacySigner: LegacyVoucherSigner = {
+      publicKey: payerKp.publicKey(),
+      sign: (m) => payerKp.sign(Buffer.from(m)),
+    };
+    const fromLegacy = createVoucher(legacySigner, domain, STROOPS);
+    const canonical = createVoucher(keypairSigner(payerKp), domain, STROOPS);
+    expect(fromKeypair).toEqual(canonical);
+    expect(fromLegacy).toEqual(canonical);
   });
 });

@@ -10,21 +10,9 @@ import {
   xdr,
   Keypair,
 } from '@stellar/stellar-sdk';
-
-/**
- * A Keypair created by ANOTHER copy of @stellar/stellar-sdk (e.g. the gateway's own node_modules) carries XDR
- * classes this copy rejects ("expected string, Uint8Array, or XdrString"). Re-create it from its seed so every
- * object that reaches a transaction comes from this module's SDK.
- */
-export function ownKeypair(kp: Keypair): Keypair {
-  if (kp instanceof Keypair) return kp;
-  return Keypair.fromRawEd25519Seed(
-    Buffer.from((kp as { rawSecretKey(): Uint8Array }).rawSecretKey()),
-  );
-}
 import { assertAllowedNetwork } from '../networks.js';
 import { parseAmount } from '../amount.js';
-import type { Voucher } from '../vouchers/voucher.js';
+import { toVoucherSigner, type Voucher, type VoucherSigner } from '../vouchers/voucher.js';
 import {
   ChannelError,
   DEFAULT_CLOSE_WAIT,
@@ -41,6 +29,21 @@ import {
   type TxReceipt,
   type WithdrawResult,
 } from './types.js';
+
+/**
+ * A Keypair created by ANOTHER copy of @stellar/stellar-sdk (e.g. the gateway's own node_modules) carries XDR
+ * classes this copy rejects ("expected string, Uint8Array, or XdrString"). Re-create it from its seed so every
+ * object that reaches a transaction comes from this module's SDK.
+ *
+ * @deprecated Prefer {@link VoucherSigner} / `keypairSigner(kp)` so secret seeds never cross module boundaries.
+ * Retained for one release.
+ */
+export function ownKeypair(kp: Keypair): Keypair {
+  if (kp instanceof Keypair) return kp;
+  return Keypair.fromRawEd25519Seed(
+    Buffer.from((kp as { rawSecretKey(): Uint8Array }).rawSecretKey()),
+  );
+}
 
 /** Contract `Error` discriminants of contracts/channel (keep in sync). */
 const CONTRACT_ERRORS: Record<number, ChannelError['code']> = {
@@ -131,7 +134,7 @@ export interface SorobanClient {
   /** Read-only simulation of `get`; undefined if the contract does not exist. */
   readChannel(contractId: string): Promise<xdr.ScVal | undefined>;
   /** Deploys an instance of an uploaded wasm; returns the new contract id. */
-  deploy(args: { wasmHash: Uint8Array; salt: Uint8Array; source: Keypair }): Promise<string>;
+  deploy(args: { wasmHash: Uint8Array; salt: Uint8Array; source: VoucherSigner }): Promise<string>;
   /** Looks a transaction up by hash; NOT_FOUND means unknown, not failed. */
   getTransaction(
     hash: string,
@@ -144,7 +147,7 @@ export interface SorobanClient {
     contractId: string;
     method: string;
     args: xdr.ScVal[];
-    source: Keypair;
+    source: VoucherSigner;
   }): Promise<InvokeResult>;
 }
 
@@ -153,12 +156,20 @@ export interface SorobanAdapterConfig {
   networkPassphrase: string;
   /** Uploaded wasm hash of contracts/channel (testnet/test networks only). */
   wasmHash: Uint8Array;
-  /** Stellar account keys the adapter may sign with, by public key. */
-  signers: ReadonlyMap<string, Keypair>;
+  /** Stellar account signers the adapter may sign with, by public key. */
+  signers: ReadonlyMap<string, VoucherSigner>;
   /** Commitment (voucher) public keys by payer address, for `init`. */
   commitmentKeys: ReadonlyMap<string, Uint8Array>;
-  /** Raw token contract address used as the channel asset. */
+  /** Current clock in unix seconds. */
   now: () => number;
+}
+
+/**
+ * @deprecated Pass {@link VoucherSigner} values in `signers` instead of `Keypair` instances.
+ * Retained for one release.
+ */
+export interface LegacySorobanAdapterConfig extends Omit<SorobanAdapterConfig, 'signers'> {
+  signers: ReadonlyMap<string, VoucherSigner | Keypair>;
 }
 
 /**
@@ -166,14 +177,23 @@ export interface SorobanAdapterConfig {
  * unit tests drive it through a fake `SorobanClient` with mapped fixtures.
  */
 export class SorobanChannelAdapter implements ChannelAdapter {
-  constructor(private readonly c: SorobanAdapterConfig) {
+  private readonly c: LegacySorobanAdapterConfig;
+
+  constructor(config: SorobanAdapterConfig);
+  /**
+   * @deprecated Pass {@link VoucherSigner} values in `signers` instead of `Keypair` instances.
+   * Retained for one release.
+   */
+  constructor(config: LegacySorobanAdapterConfig);
+  constructor(c: LegacySorobanAdapterConfig) {
     assertAllowedNetwork(c.networkPassphrase);
+    this.c = c;
   }
 
-  private signer(address: string): Keypair {
+  private signer(address: string): VoucherSigner {
     const k = this.c.signers.get(address);
     if (!k) throw new ChannelError('invalid_params', `No signer configured for ${address}`);
-    return ownKeypair(k);
+    return toVoucherSigner(k);
   }
 
   private receipt(r: InvokeResult): TxReceipt {
@@ -184,7 +204,7 @@ export class SorobanChannelAdapter implements ChannelAdapter {
     contractId: string,
     method: string,
     args: xdr.ScVal[],
-    source: Keypair,
+    source: VoucherSigner,
   ): Promise<InvokeResult> {
     const r = await this.c.client.invoke({ contractId, method, args, source });
     if (r.status === 'FAILED') throw mapContractError(r.errorMessage ?? 'transaction failed');
@@ -411,14 +431,28 @@ export class RpcSorobanClient implements SorobanClient {
     return sim.result?.retval;
   }
 
-  private async submit(foreignSource: Keypair, op: xdr.Operation): Promise<InvokeResult> {
-    const source = ownKeypair(foreignSource);
-    const raw = await this.build(source.publicKey(), op);
+  private async submit(
+    sourceInput: VoucherSigner | Keypair,
+    op: xdr.Operation,
+  ): Promise<InvokeResult> {
+    const signer = toVoucherSigner(sourceInput);
+    const pub = signer.publicKey();
+    const raw = await this.build(pub, op);
     const sim = await this.server.simulateTransaction(raw);
     if (rpc.Api.isSimulationError(sim)) throw mapContractError(sim.error);
     const tx = rpc.assembleTransaction(raw, sim).build();
-    tx.sign(source);
-    const hash = Buffer.from(tx.hash()).toString('hex'); // known BEFORE submission
+    const rawHash = tx.hash();
+    const hash = Buffer.from(rawHash).toString('hex'); // known BEFORE submission
+    const sig = await signer.sign(new Uint8Array(rawHash));
+    if (!(sig instanceof Uint8Array) || sig.byteLength !== 64) {
+      throw new ChannelError('invalid_params', 'Signer must return a 64-byte ed25519 signature');
+    }
+    tx.addDecoratedSignature(
+      new xdr.DecoratedSignature({
+        hint: Keypair.fromPublicKey(pub).signatureHint(),
+        signature: Buffer.from(sig),
+      }),
+    );
     let send;
     try {
       send = await this.server.sendTransaction(tx);
@@ -473,11 +507,25 @@ export class RpcSorobanClient implements SorobanClient {
     }
   }
 
-  async deploy(a: { wasmHash: Uint8Array; salt: Uint8Array; source: Keypair }): Promise<string> {
+  async deploy(a: {
+    wasmHash: Uint8Array;
+    salt: Uint8Array;
+    source: VoucherSigner;
+  }): Promise<string>;
+  /**
+   * @deprecated Pass a {@link VoucherSigner} instead of a `Keypair`. Retained for one release.
+   */
+  async deploy(a: { wasmHash: Uint8Array; salt: Uint8Array; source: Keypair }): Promise<string>;
+  async deploy(a: {
+    wasmHash: Uint8Array;
+    salt: Uint8Array;
+    source: VoucherSigner | Keypair;
+  }): Promise<string> {
+    const signer = toVoucherSigner(a.source);
     const r = await this.submit(
-      a.source,
+      signer,
       Operation.createCustomContract({
-        address: new Address(a.source.publicKey()),
+        address: new Address(signer.publicKey()),
         wasmHash: Buffer.from(a.wasmHash),
         salt: Buffer.from(a.salt),
       }),
@@ -492,7 +540,22 @@ export class RpcSorobanClient implements SorobanClient {
     contractId: string;
     method: string;
     args: xdr.ScVal[];
+    source: VoucherSigner;
+  }): Promise<InvokeResult>;
+  /**
+   * @deprecated Pass a {@link VoucherSigner} instead of a `Keypair`. Retained for one release.
+   */
+  invoke(a: {
+    contractId: string;
+    method: string;
+    args: xdr.ScVal[];
     source: Keypair;
+  }): Promise<InvokeResult>;
+  invoke(a: {
+    contractId: string;
+    method: string;
+    args: xdr.ScVal[];
+    source: VoucherSigner | Keypair;
   }): Promise<InvokeResult> {
     return this.submit(
       a.source,
