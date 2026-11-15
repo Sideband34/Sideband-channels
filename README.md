@@ -56,11 +56,27 @@ Requires Node 22+; the contract needs a stable Rust toolchain.
 ```bash
 git clone https://github.com/Sideband34/Sideband-channels && cd Sideband-channels
 npm ci
-npm run check                    # prettier, eslint, tsc, 64 vitest tests
+npm run check                    # prettier, eslint, tsc, vitest tests
 npx tsx examples/offline-session.ts
+npx tsx examples/stellar-cli-signer.ts
 npm run fixtures                 # regenerate fixtures/voucher-vectors.json
 cd contracts && cargo test       # 23 contract tests (incl. proptest)
 ```
+
+### Custom signers (`VoucherSigner`)
+
+SDK entry points (`createVoucher`, `signVoucher`, `SorobanChannelAdapter`, and `RpcSorobanClient`) accept a `VoucherSigner` instead of a raw secret or `Keypair` so hardware wallets, KMS backends, remote signers, and keystores can sign without exposing secret material to the SDK:
+
+```ts
+export interface VoucherSigner {
+  publicKey(): string;
+  sign(bytes: Uint8Array): Uint8Array | Promise<Uint8Array>;
+}
+```
+
+- **Local dev / tests:** wrap a `@stellar/stellar-sdk` `Keypair` with `keypairSigner(kp)`.
+- **Hardware / KMS / keystore:** implement `VoucherSigner` (`sign(bytes)` receives only the commitment preimage bytes for vouchers or the 32-byte `tx.hash()` for Soroban transactions, never a secret). See [`examples/stellar-cli-signer.ts`](./examples/stellar-cli-signer.ts) for an async adapter over the `stellar-cli` keystore (`STELLAR_IDENTITY=<name>`).
+- **Deprecation notice:** passing a raw `Keypair` (or a legacy `{ readonly publicKey: string; sign }` object) directly to `createVoucher`, `signVoucher`, `SorobanChannelAdapter` (`signers`), or `RpcSorobanClient` (`deploy` / `invoke`) is **deprecated** and retained for **one release** only. Migrate callers to `keypairSigner(kp)` or a custom `VoucherSigner`.
 
 ### Building the WASM contract
 

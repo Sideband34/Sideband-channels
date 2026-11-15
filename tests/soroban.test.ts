@@ -23,6 +23,7 @@ import {
   mapContractError,
   type InvokeResult,
   type SorobanClient,
+  type VoucherSigner,
 } from '../src/index.js';
 
 const TESTNET = NETWORK_PASSPHRASES.testnet;
@@ -73,7 +74,7 @@ class FakeClient implements SorobanClient {
     this.deployed++;
     return CHANNEL;
   }
-  async invoke(a: { method: string; args: xdr.ScVal[]; source: Keypair }) {
+  async invoke(a: { method: string; args: xdr.ScVal[]; source: VoucherSigner }) {
     this.calls.push({ method: a.method, args: a.args, source: a.source.publicKey() });
     const r = this.next?.(a.method) ?? {
       hash: 'h-' + a.method,
@@ -107,8 +108,8 @@ function adapter(
     networkPassphrase: TESTNET,
     wasmHash: Buffer.alloc(32, 7),
     signers: new Map([
-      [payerKp.publicKey(), payerKp],
-      [providerKp.publicKey(), providerKp],
+      [payerKp.publicKey(), keypairSigner(payerKp)],
+      [providerKp.publicKey(), keypairSigner(providerKp)],
     ]),
     commitmentKeys: new Map([[payerKp.publicKey(), payerKp.rawPublicKey()]]),
     now: () => 1000,
@@ -552,6 +553,68 @@ describe('RpcSorobanClient (fake rpc server)', () => {
     expect(
       () => new RpcSorobanClient(server(), NETWORK_PASSPHRASES.public, payerKp.publicKey()),
     ).toThrow();
+  });
+
+  it('signs transactions through an async recording VoucherSigner that only sees tx.hash()', async () => {
+    const signedHashes: Uint8Array[] = [];
+    let sentEnvelopeSignatures: xdr.DecoratedSignature[] = [];
+    const remoteSigner: VoucherSigner = {
+      publicKey: () => providerKp.publicKey(),
+      async sign(bytes: Uint8Array): Promise<Uint8Array> {
+        signedHashes.push(new Uint8Array(bytes));
+        return new Uint8Array(providerKp.sign(Buffer.from(bytes)));
+      },
+    };
+
+    const c = new RpcSorobanClient(
+      server({
+        sendTransaction: async (tx: { signatures: xdr.DecoratedSignature[] }) => {
+          sentEnvelopeSignatures = tx.signatures;
+          return { status: 'PENDING' };
+        },
+        getTransaction: async () => ({ status: 'SUCCESS', ledger: 51 }),
+      }),
+      TESTNET,
+      providerKp.publicKey(),
+      1,
+      2,
+    );
+
+    const r = await c.invoke({
+      contractId: CHANNEL,
+      method: 'settle',
+      args: [],
+      source: remoteSigner,
+    });
+    expect(r).toMatchObject({ status: 'SUCCESS', ledger: 51 });
+    expect(signedHashes).toHaveLength(1);
+    expect(signedHashes[0]).toHaveLength(32);
+    expect(Buffer.from(signedHashes[0]!).toString('hex')).toBe(r.hash);
+    expect(sentEnvelopeSignatures).toHaveLength(1);
+    expect(
+      Keypair.fromPublicKey(providerKp.publicKey()).verify(
+        Buffer.from(signedHashes[0]!),
+        sentEnvelopeSignatures[0]!.toXDR().subarray(8),
+      ),
+    ).toBe(true);
+  });
+
+  it('keeps the deprecated Keypair signers overload working in SorobanChannelAdapter', async () => {
+    const c = new FakeClient();
+    c.state = channelScVal({ status: 'Open' });
+    const legacyAdapter = new SorobanChannelAdapter({
+      client: c,
+      networkPassphrase: TESTNET,
+      wasmHash: Buffer.alloc(32, 7),
+      signers: new Map([
+        [payerKp.publicKey(), payerKp],
+        [providerKp.publicKey(), providerKp],
+      ]),
+      commitmentKeys: new Map([[payerKp.publicKey(), payerKp.rawPublicKey()]]),
+      now: () => 1000,
+    });
+    const res = await legacyAdapter.topUp(CHANNEL, S);
+    expect(res.deposit).toBe(11n * S);
   });
 });
 

@@ -15,36 +15,173 @@ export interface Voucher {
   readonly signature: string;
 }
 
-/** Signing abstraction: secret material stays behind this interface. */
+/**
+ * Signing abstraction for hardware wallets, KMS, keystores, or remote signers.
+ * Secret material stays behind this interface; the SDK only ever passes the
+ * exact bytes to be signed (`Uint8Array`) and reads the Stellar `G...` public key.
+ */
 export interface VoucherSigner {
+  publicKey(): string;
+  sign(bytes: Uint8Array): Uint8Array | Promise<Uint8Array>;
+}
+
+/** Synchronous {@link VoucherSigner} refinement (for example {@link keypairSigner}). */
+export interface SyncVoucherSigner extends VoucherSigner {
+  publicKey(): string;
+  sign(bytes: Uint8Array): Uint8Array;
+}
+
+/** Asynchronous {@link VoucherSigner} refinement (hardware wallet, KMS, CLI keystore). */
+export interface AsyncVoucherSigner extends VoucherSigner {
+  publicKey(): string;
+  sign(bytes: Uint8Array): Promise<Uint8Array>;
+}
+
+/**
+ * @deprecated Implement `publicKey(): string` on {@link VoucherSigner} instead
+ * of a `publicKey` string property. Retained for one release.
+ */
+export interface LegacyVoucherSigner {
   readonly publicKey: string;
   sign(message: Uint8Array): Uint8Array;
 }
 
 /** Test/dev signer over a stellar-sdk Keypair. Never persist its secret. */
-export function keypairSigner(kp: Keypair): VoucherSigner {
-  return { publicKey: kp.publicKey(), sign: (m) => kp.sign(Buffer.from(m)) };
+export function keypairSigner(kp: Keypair): SyncVoucherSigner {
+  const pub = kp.publicKey();
+  return {
+    publicKey: () => pub,
+    sign: (bytes: Uint8Array) => new Uint8Array(kp.sign(Buffer.from(bytes))),
+  };
 }
 
 const hex = (b: Uint8Array) => Buffer.from(b).toString('hex');
 const sha256hex = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
 
+function isPromiseLike<T>(value: T | PromiseLike<T>): value is PromiseLike<T> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'then' in value &&
+    typeof (value as PromiseLike<T>).then === 'function'
+  );
+}
+
+function isKeypairLike(
+  candidate: VoucherSigner | Keypair | LegacyVoucherSigner,
+): candidate is Keypair {
+  return (
+    candidate instanceof Keypair ||
+    (typeof (candidate as Keypair).publicKey === 'function' &&
+      typeof (candidate as Keypair).rawSecretKey === 'function')
+  );
+}
+
+/**
+ * Normalizes a {@link VoucherSigner} or a deprecated `Keypair` / legacy property
+ * signer into a {@link VoucherSigner}.
+ */
+export function toVoucherSigner(
+  signer: VoucherSigner | Keypair | LegacyVoucherSigner,
+): VoucherSigner {
+  if (isKeypairLike(signer)) {
+    return keypairSigner(signer);
+  }
+  if (typeof (signer as LegacyVoucherSigner).publicKey === 'string') {
+    const legacy = signer as LegacyVoucherSigner;
+    return {
+      publicKey: () => legacy.publicKey,
+      sign: (bytes: Uint8Array) => legacy.sign(bytes),
+    };
+  }
+  return signer as VoucherSigner;
+}
+
+function finalizeVoucher(
+  domain: VoucherDomain,
+  cumulativeStroops: bigint,
+  commitment: string,
+  sig: Uint8Array,
+): Voucher {
+  if (!(sig instanceof Uint8Array) || sig.byteLength !== 64) {
+    throw new VoucherFormatError('Signer must return a 64-byte ed25519 signature');
+  }
+  return {
+    channelRef: domain.channelId,
+    cumulativeAmount: formatAmount(cumulativeStroops),
+    commitment,
+    signature: hex(sig),
+  };
+}
+
+export function createVoucher(
+  signer: SyncVoucherSigner,
+  domain: VoucherDomain,
+  cumulativeStroops: bigint,
+): Voucher;
+export function createVoucher(
+  signer: AsyncVoucherSigner,
+  domain: VoucherDomain,
+  cumulativeStroops: bigint,
+): Promise<Voucher>;
 export function createVoucher(
   signer: VoucherSigner,
   domain: VoucherDomain,
   cumulativeStroops: bigint,
-): Voucher {
+): Voucher | Promise<Voucher>;
+/**
+ * @deprecated Pass a {@link VoucherSigner} (for example `keypairSigner(kp)` or a
+ * custom hardware/KMS signer) instead of a `Keypair` or legacy property signer.
+ * Retained for one release.
+ */
+export function createVoucher(
+  signer: Keypair | LegacyVoucherSigner,
+  domain: VoucherDomain,
+  cumulativeStroops: bigint,
+): Voucher;
+export function createVoucher(
+  signer: VoucherSigner | Keypair | LegacyVoucherSigner,
+  domain: VoucherDomain,
+  cumulativeStroops: bigint,
+): Voucher | Promise<Voucher> {
   assertAllowedNetwork(domain.networkPassphrase);
-  if (signer.publicKey !== domain.payer) {
+  const resolved = toVoucherSigner(signer);
+  if (resolved.publicKey() !== domain.payer) {
     throw new VoucherFormatError('Signer is not the channel payer');
   }
   const preimage = buildPreimage(domain, cumulativeStroops);
-  return {
-    channelRef: domain.channelId,
-    cumulativeAmount: formatAmount(cumulativeStroops),
-    commitment: sha256hex(preimage),
-    signature: hex(signer.sign(preimage)),
-  };
+  const commitment = sha256hex(preimage);
+  // Pass an isolated copy so custom signers only observe the commitment bytes to sign.
+  const signed = resolved.sign(new Uint8Array(preimage));
+  if (isPromiseLike(signed)) {
+    return Promise.resolve(signed).then((sig) =>
+      finalizeVoucher(domain, cumulativeStroops, commitment, sig),
+    );
+  }
+  return finalizeVoucher(domain, cumulativeStroops, commitment, signed);
+}
+
+/** Async convenience wrapper around {@link createVoucher} that always returns a Promise. */
+export async function signVoucher(
+  signer: VoucherSigner,
+  domain: VoucherDomain,
+  cumulativeStroops: bigint,
+): Promise<Voucher>;
+/**
+ * @deprecated Pass a {@link VoucherSigner} instead of a `Keypair` or legacy signer.
+ * Retained for one release.
+ */
+export async function signVoucher(
+  signer: Keypair | LegacyVoucherSigner,
+  domain: VoucherDomain,
+  cumulativeStroops: bigint,
+): Promise<Voucher>;
+export async function signVoucher(
+  signer: VoucherSigner | Keypair | LegacyVoucherSigner,
+  domain: VoucherDomain,
+  cumulativeStroops: bigint,
+): Promise<Voucher> {
+  return await createVoucher(signer as VoucherSigner, domain, cumulativeStroops);
 }
 
 export type VerifyFailure =
